@@ -173,6 +173,7 @@ cython_debug/
 .pypirc
 
 .DS_Store
+*.db
 
 # Claude Code local settings
 .claude/settings.local.json

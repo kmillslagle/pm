@@ -1,0 +1,86 @@
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
+
+export async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      ...options?.headers,
+    },
+  });
+  if (!res.ok) {
+    throw new Error(`API error: ${res.status}`);
+  }
+  return res.json() as Promise<T>;
+}
+
+export async function login(username: string, password: string): Promise<{ username: string }> {
+  return apiFetch("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ username, password }),
+  });
+}
+
+export async function logout(): Promise<void> {
+  await apiFetch("/api/auth/logout", { method: "POST" });
+}
+
+export async function getMe(): Promise<{ username: string }> {
+  return apiFetch("/api/auth/me");
+}
+
+export type Card = { id: string; title: string; details: string };
+export type Column = { id: string; title: string; cardIds: string[] };
+export type BoardData = { columns: Column[]; cards: Record<string, Card> };
+
+export async function getBoard(): Promise<BoardData> {
+  return apiFetch("/api/board");
+}
+
+export async function renameColumn(columnId: string, title: string): Promise<void> {
+  await apiFetch(`/api/columns/${columnId}`, {
+    method: "PUT",
+    body: JSON.stringify({ title }),
+  });
+}
+
+export async function createCard(columnId: string, title: string, details: string): Promise<Card> {
+  return apiFetch(`/api/columns/${columnId}/cards`, {
+    method: "POST",
+    body: JSON.stringify({ title, details }),
+  });
+}
+
+export async function deleteCard(cardId: string): Promise<void> {
+  await apiFetch(`/api/cards/${cardId}`, { method: "DELETE" });
+}
+
+export async function moveCard(cardId: string, columnId: string, position: number): Promise<void> {
+  await apiFetch(`/api/cards/${cardId}/move`, {
+    method: "PUT",
+    body: JSON.stringify({ column_id: columnId, position }),
+  });
+}
+
+export type ChatMessage = { role: "user" | "assistant"; content: string };
+export type BoardUpdate = {
+  action: string;
+  card_id?: string;
+  column_id?: string;
+  title?: string;
+  details?: string;
+  position?: number;
+};
+export type ChatResponse = { reply: string; board_updates: BoardUpdate[] };
+
+export async function sendChatMessage(message: string): Promise<ChatResponse> {
+  return apiFetch("/api/chat", {
+    method: "POST",
+    body: JSON.stringify({ message }),
+  });
+}
+
+export async function getChatHistory(): Promise<ChatMessage[]> {
+  return apiFetch("/api/chat/history");
+}

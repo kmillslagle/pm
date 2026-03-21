@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -13,10 +13,18 @@ import {
 } from "@dnd-kit/core";
 import { KanbanColumn } from "@/components/KanbanColumn";
 import { KanbanCardPreview } from "@/components/KanbanCardPreview";
-import { createId, initialData, moveCard, type BoardData } from "@/lib/kanban";
+import {
+  getBoard,
+  renameColumn as apiRenameColumn,
+  createCard as apiCreateCard,
+  deleteCard as apiDeleteCard,
+  moveCard as apiMoveCard,
+  type BoardData,
+} from "@/lib/api";
+import { moveCard } from "@/lib/kanban";
 
 export const KanbanBoard = () => {
-  const [board, setBoard] = useState<BoardData>(() => initialData);
+  const [board, setBoard] = useState<BoardData | null>(null);
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
 
   const sensors = useSensors(
@@ -25,7 +33,11 @@ export const KanbanBoard = () => {
     })
   );
 
-  const cardsById = useMemo(() => board.cards, [board.cards]);
+  useEffect(() => {
+    getBoard().then(setBoard);
+  }, []);
+
+  const cardsById = useMemo(() => board?.cards ?? {}, [board?.cards]);
 
   const handleDragStart = (event: DragStartEvent) => {
     setActiveCardId(event.active.id as string);
@@ -35,61 +47,74 @@ export const KanbanBoard = () => {
     const { active, over } = event;
     setActiveCardId(null);
 
-    if (!over || active.id === over.id) {
+    if (!over || active.id === over.id || !board) {
       return;
     }
 
-    setBoard((prev) => ({
-      ...prev,
-      columns: moveCard(prev.columns, active.id as string, over.id as string),
-    }));
+    const newColumns = moveCard(board.columns, active.id as string, over.id as string);
+    setBoard((prev) => prev ? { ...prev, columns: newColumns } : prev);
+
+    // Find the new column and position for the moved card
+    for (const col of newColumns) {
+      const idx = col.cardIds.indexOf(active.id as string);
+      if (idx !== -1) {
+        apiMoveCard(active.id as string, col.id, idx);
+        break;
+      }
+    }
   };
 
   const handleRenameColumn = (columnId: string, title: string) => {
-    setBoard((prev) => ({
+    setBoard((prev) => prev ? {
       ...prev,
       columns: prev.columns.map((column) =>
         column.id === columnId ? { ...column, title } : column
       ),
-    }));
+    } : prev);
+    apiRenameColumn(columnId, title);
   };
 
-  const handleAddCard = (columnId: string, title: string, details: string) => {
-    const id = createId("card");
-    setBoard((prev) => ({
+  const handleAddCard = async (columnId: string, title: string, details: string) => {
+    const card = await apiCreateCard(columnId, title, details);
+    setBoard((prev) => prev ? {
       ...prev,
-      cards: {
-        ...prev.cards,
-        [id]: { id, title, details: details || "No details yet." },
-      },
+      cards: { ...prev.cards, [card.id]: card },
       columns: prev.columns.map((column) =>
         column.id === columnId
-          ? { ...column, cardIds: [...column.cardIds, id] }
+          ? { ...column, cardIds: [...column.cardIds, card.id] }
           : column
       ),
-    }));
+    } : prev);
   };
 
   const handleDeleteCard = (columnId: string, cardId: string) => {
     setBoard((prev) => {
+      if (!prev) return prev;
+      const remainingCards = Object.fromEntries(
+        Object.entries(prev.cards).filter(([id]) => id !== cardId)
+      );
       return {
         ...prev,
-        cards: Object.fromEntries(
-          Object.entries(prev.cards).filter(([id]) => id !== cardId)
-        ),
+        cards: remainingCards,
         columns: prev.columns.map((column) =>
           column.id === columnId
-            ? {
-                ...column,
-                cardIds: column.cardIds.filter((id) => id !== cardId),
-              }
+            ? { ...column, cardIds: column.cardIds.filter((id) => id !== cardId) }
             : column
         ),
       };
     });
+    apiDeleteCard(cardId);
   };
 
   const activeCard = activeCardId ? cardsById[activeCardId] : null;
+
+  if (!board) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <p className="text-sm text-[var(--gray-text)]">Loading board...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="relative overflow-hidden">
