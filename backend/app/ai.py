@@ -9,8 +9,8 @@ from app.database import get_connection
 
 router = APIRouter(prefix="/api")
 
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
-MODEL = "openai/gpt-oss-120b"
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+MODEL = "claude-sonnet-4-20250514"
 
 class ChatRequest(BaseModel):
     message: str
@@ -160,31 +160,29 @@ def chat(body: ChatRequest, request: Request) -> ChatResponse:
     _save_message(board_id, "user", body.message)
 
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": f"Current board state:\n{json.dumps(board_json, indent=2)}"},
+        {"role": "assistant", "content": "Got it. I have the current board state. How can I help?"},
     ]
     messages.extend(history)
     messages.append({"role": "user", "content": body.message})
 
-    if not OPENROUTER_API_KEY:
-        reply = "AI is not configured. Set OPENROUTER_API_KEY in your .env file."
+    if not ANTHROPIC_API_KEY:
+        reply = "AI is not configured. Set ANTHROPIC_API_KEY in your .env file."
         _save_message(board_id, "assistant", reply)
         return ChatResponse(reply=reply)
 
-    from openai import OpenAI
+    import anthropic
 
-    client = OpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=OPENROUTER_API_KEY,
-    )
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-    response = client.chat.completions.create(
+    response = client.messages.create(
         model=MODEL,
+        max_tokens=1024,
+        system=SYSTEM_PROMPT,
         messages=messages,
-        response_format={"type": "json_object"},
     )
 
-    raw = response.choices[0].message.content or "{}"
+    raw = response.content[0].text if response.content else "{}"
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:

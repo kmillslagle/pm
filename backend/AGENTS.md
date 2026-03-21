@@ -7,7 +7,7 @@ Python FastAPI backend serving the Kanban Studio API and static frontend.
 - `app/main.py` - FastAPI app entry point, mounts routers and serves static frontend
 - `app/auth.py` - Authentication routes (login, logout, me) with session cookies
 - `app/board.py` - Board CRUD API routes (get board, rename column, create/delete/move/update cards)
-- `app/ai.py` - AI chat endpoint using OpenRouter (model: openai/gpt-oss-120b) with structured JSON outputs
+- `app/ai.py` - AI chat endpoint using Claude API / Anthropic (model: claude-sonnet-4-20250514) with structured JSON outputs
 - `app/database.py` - SQLite database initialization and connection helper
 - `tests/test_api.py` - API tests covering auth and board endpoints
 
