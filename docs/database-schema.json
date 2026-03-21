@@ -1,0 +1,46 @@
+{
+  "description": "Kanban Studio SQLite database schema",
+  "tables": {
+    "users": {
+      "columns": {
+        "id": "INTEGER PRIMARY KEY AUTOINCREMENT",
+        "username": "TEXT UNIQUE NOT NULL",
+        "password": "TEXT NOT NULL"
+      }
+    },
+    "boards": {
+      "columns": {
+        "id": "INTEGER PRIMARY KEY AUTOINCREMENT",
+        "user_id": "INTEGER NOT NULL REFERENCES users(id)",
+        "name": "TEXT NOT NULL DEFAULT 'My Board'"
+      }
+    },
+    "columns_table": {
+      "actual_name": "columns",
+      "columns": {
+        "id": "TEXT PRIMARY KEY",
+        "board_id": "INTEGER NOT NULL REFERENCES boards(id)",
+        "title": "TEXT NOT NULL",
+        "position": "INTEGER NOT NULL"
+      }
+    },
+    "cards": {
+      "columns": {
+        "id": "TEXT PRIMARY KEY",
+        "column_id": "TEXT NOT NULL REFERENCES columns(id)",
+        "title": "TEXT NOT NULL",
+        "details": "TEXT NOT NULL DEFAULT ''",
+        "position": "INTEGER NOT NULL"
+      }
+    },
+    "chat_messages": {
+      "columns": {
+        "id": "INTEGER PRIMARY KEY AUTOINCREMENT",
+        "board_id": "INTEGER NOT NULL REFERENCES boards(id)",
+        "role": "TEXT NOT NULL CHECK(role IN ('user', 'assistant'))",
+        "content": "TEXT NOT NULL",
+        "created_at": "TEXT NOT NULL DEFAULT (datetime('now'))"
+      }
+    }
+  }
+}
