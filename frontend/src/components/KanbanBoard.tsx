@@ -13,10 +13,25 @@ import {
 } from "@dnd-kit/core";
 import { KanbanColumn } from "@/components/KanbanColumn";
 import { KanbanCardPreview } from "@/components/KanbanCardPreview";
-import { createId, initialData, moveCard, type BoardData } from "@/lib/kanban";
+import { createId, moveCard, type BoardData } from "@/lib/kanban";
 
-export const KanbanBoard = () => {
-  const [board, setBoard] = useState<BoardData>(() => initialData);
+type KanbanBoardProps = {
+  boardData: BoardData;
+  onBoardChange: (board: BoardData) => void;
+  username: string;
+  onLogout: () => void;
+  onToggleSidebar: () => void;
+  sidebarOpen: boolean;
+};
+
+export const KanbanBoard = ({
+  boardData,
+  onBoardChange,
+  username,
+  onLogout,
+  onToggleSidebar,
+  sidebarOpen,
+}: KanbanBoardProps) => {
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
 
   const sensors = useSensors(
@@ -25,7 +40,7 @@ export const KanbanBoard = () => {
     })
   );
 
-  const cardsById = useMemo(() => board.cards, [board.cards]);
+  const cardsById = useMemo(() => boardData.cards, [boardData.cards]);
 
   const handleDragStart = (event: DragStartEvent) => {
     setActiveCardId(event.active.id as string);
@@ -35,57 +50,48 @@ export const KanbanBoard = () => {
     const { active, over } = event;
     setActiveCardId(null);
 
-    if (!over || active.id === over.id) {
-      return;
-    }
+    if (!over || active.id === over.id) return;
 
-    setBoard((prev) => ({
-      ...prev,
-      columns: moveCard(prev.columns, active.id as string, over.id as string),
-    }));
+    onBoardChange({
+      ...boardData,
+      columns: moveCard(boardData.columns, active.id as string, over.id as string),
+    });
   };
 
   const handleRenameColumn = (columnId: string, title: string) => {
-    setBoard((prev) => ({
-      ...prev,
-      columns: prev.columns.map((column) =>
-        column.id === columnId ? { ...column, title } : column
+    onBoardChange({
+      ...boardData,
+      columns: boardData.columns.map((col) =>
+        col.id === columnId ? { ...col, title } : col
       ),
-    }));
+    });
   };
 
   const handleAddCard = (columnId: string, title: string, details: string) => {
     const id = createId("card");
-    setBoard((prev) => ({
-      ...prev,
+    onBoardChange({
+      ...boardData,
       cards: {
-        ...prev.cards,
+        ...boardData.cards,
         [id]: { id, title, details: details || "No details yet." },
       },
-      columns: prev.columns.map((column) =>
-        column.id === columnId
-          ? { ...column, cardIds: [...column.cardIds, id] }
-          : column
+      columns: boardData.columns.map((col) =>
+        col.id === columnId ? { ...col, cardIds: [...col.cardIds, id] } : col
       ),
-    }));
+    });
   };
 
   const handleDeleteCard = (columnId: string, cardId: string) => {
-    setBoard((prev) => {
-      return {
-        ...prev,
-        cards: Object.fromEntries(
-          Object.entries(prev.cards).filter(([id]) => id !== cardId)
-        ),
-        columns: prev.columns.map((column) =>
-          column.id === columnId
-            ? {
-                ...column,
-                cardIds: column.cardIds.filter((id) => id !== cardId),
-              }
-            : column
-        ),
-      };
+    onBoardChange({
+      ...boardData,
+      cards: Object.fromEntries(
+        Object.entries(boardData.cards).filter(([id]) => id !== cardId)
+      ),
+      columns: boardData.columns.map((col) =>
+        col.id === columnId
+          ? { ...col, cardIds: col.cardIds.filter((id) => id !== cardId) }
+          : col
+      ),
     });
   };
 
@@ -111,17 +117,40 @@ export const KanbanBoard = () => {
                 and capture quick notes without getting buried in settings.
               </p>
             </div>
-            <div className="rounded-2xl border border-[var(--stroke)] bg-[var(--surface)] px-5 py-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.25em] text-[var(--gray-text)]">
-                Focus
-              </p>
-              <p className="mt-2 text-lg font-semibold text-[var(--primary-blue)]">
-                One board. Five columns. Zero clutter.
-              </p>
+            <div className="flex flex-col items-end gap-3">
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-medium text-[var(--gray-text)]">
+                  {username}
+                </span>
+                <button
+                  onClick={onLogout}
+                  className="rounded-full border border-[var(--stroke)] px-4 py-2 text-xs font-semibold uppercase tracking-wide text-[var(--gray-text)] transition hover:border-[var(--primary-blue)] hover:text-[var(--primary-blue)]"
+                >
+                  Sign out
+                </button>
+                <button
+                  onClick={onToggleSidebar}
+                  className={`rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-wide transition ${
+                    sidebarOpen
+                      ? "bg-[var(--secondary-purple)] text-white hover:brightness-110"
+                      : "border border-[var(--stroke)] text-[var(--navy-dark)] hover:border-[var(--secondary-purple)] hover:text-[var(--secondary-purple)]"
+                  }`}
+                >
+                  AI Chat
+                </button>
+              </div>
+              <div className="rounded-2xl border border-[var(--stroke)] bg-[var(--surface)] px-5 py-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.25em] text-[var(--gray-text)]">
+                  Focus
+                </p>
+                <p className="mt-2 text-lg font-semibold text-[var(--primary-blue)]">
+                  One board. Five columns. Zero clutter.
+                </p>
+              </div>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-4">
-            {board.columns.map((column) => (
+            {boardData.columns.map((column) => (
               <div
                 key={column.id}
                 className="flex items-center gap-2 rounded-full border border-[var(--stroke)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-[var(--navy-dark)]"
@@ -140,11 +169,11 @@ export const KanbanBoard = () => {
           onDragEnd={handleDragEnd}
         >
           <section className="grid gap-6 lg:grid-cols-5">
-            {board.columns.map((column) => (
+            {boardData.columns.map((column) => (
               <KanbanColumn
                 key={column.id}
                 column={column}
-                cards={column.cardIds.map((cardId) => board.cards[cardId])}
+                cards={column.cardIds.map((cardId) => boardData.cards[cardId]).filter(Boolean)}
                 onRename={handleRenameColumn}
                 onAddCard={handleAddCard}
                 onDeleteCard={handleDeleteCard}

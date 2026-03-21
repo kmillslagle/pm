@@ -1,17 +1,35 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { KanbanBoard } from "@/components/KanbanBoard";
+import { initialData, type BoardData } from "@/lib/kanban";
+
+const noop = () => {};
+
+function BoardWrapper({ onChange }: { onChange?: (b: BoardData) => void }) {
+  const [board, setBoard] = useState(initialData);
+  return (
+    <KanbanBoard
+      boardData={board}
+      onBoardChange={(b) => { setBoard(b); onChange?.(b); }}
+      username="user"
+      onLogout={noop}
+      onToggleSidebar={noop}
+      sidebarOpen={false}
+    />
+  );
+}
 
 const getFirstColumn = () => screen.getAllByTestId(/column-/i)[0];
 
 describe("KanbanBoard", () => {
   it("renders five columns", () => {
-    render(<KanbanBoard />);
+    render(<BoardWrapper />);
     expect(screen.getAllByTestId(/column-/i)).toHaveLength(5);
   });
 
   it("renames a column", async () => {
-    render(<KanbanBoard />);
+    render(<BoardWrapper />);
     const column = getFirstColumn();
     const input = within(column).getByLabelText("Column title");
     await userEvent.clear(input);
@@ -20,11 +38,9 @@ describe("KanbanBoard", () => {
   });
 
   it("adds and removes a card", async () => {
-    render(<KanbanBoard />);
+    render(<BoardWrapper />);
     const column = getFirstColumn();
-    const addButton = within(column).getByRole("button", {
-      name: /add a card/i,
-    });
+    const addButton = within(column).getByRole("button", { name: /add a card/i });
     await userEvent.click(addButton);
 
     const titleInput = within(column).getByPlaceholderText(/card title/i);

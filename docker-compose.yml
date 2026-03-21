@@ -1,0 +1,12 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - kanban-data:/data
+    env_file:
+      - .env
+
+volumes:
+  kanban-data:
