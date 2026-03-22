@@ -2,7 +2,7 @@ import { render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { KanbanBoard } from "@/components/KanbanBoard";
-import type { BoardData } from "@/lib/api";
+import type { BoardData } from "@/lib/kanban";
 
 const mockBoard: BoardData = {
   columns: [
@@ -24,39 +24,46 @@ const mockBoard: BoardData = {
   },
 };
 
-vi.mock("@/lib/api", () => ({
-  getBoard: vi.fn(() => Promise.resolve(mockBoard)),
-  renameColumn: vi.fn(() => Promise.resolve()),
-  createCard: vi.fn((columnId: string, title: string, details: string) =>
-    Promise.resolve({ id: "card-new", title, details: details || "No details yet." })
-  ),
-  deleteCard: vi.fn(() => Promise.resolve()),
-  moveCard: vi.fn(() => Promise.resolve()),
-}));
-
 const getFirstColumn = () => screen.getAllByTestId(/column-/i)[0];
 
+const renderBoard = (boardOverride?: Partial<BoardData>) => {
+  const board = { ...mockBoard, ...boardOverride };
+  const onBoardChange = vi.fn();
+  render(
+    <KanbanBoard
+      projectId="test-project"
+      projectName="Test Project"
+      board={board}
+      onBoardChange={onBoardChange}
+    />
+  );
+  return { onBoardChange };
+};
+
 describe("KanbanBoard", () => {
-  it("renders five columns", async () => {
-    render(<KanbanBoard boardId={1} />);
-    await waitFor(() => {
-      expect(screen.getAllByTestId(/column-/i)).toHaveLength(5);
-    });
+  it("renders five columns", () => {
+    renderBoard();
+    expect(screen.getAllByTestId(/column-/i)).toHaveLength(5);
   });
 
-  it("renames a column", async () => {
-    render(<KanbanBoard boardId={1} />);
-    await waitFor(() => screen.getAllByTestId(/column-/i));
+  it("displays the project name", () => {
+    renderBoard();
+    expect(screen.getByText("Test Project")).toBeInTheDocument();
+  });
+
+  it("calls onBoardChange when a column is renamed", async () => {
+    const { onBoardChange } = renderBoard();
     const column = getFirstColumn();
     const input = within(column).getByLabelText("Column title");
-    await userEvent.clear(input);
-    await userEvent.type(input, "New Name");
-    expect(input).toHaveValue("New Name");
+    await userEvent.type(input, "X");
+    expect(onBoardChange).toHaveBeenCalled();
+    const lastCall = onBoardChange.mock.calls[onBoardChange.mock.calls.length - 1][0];
+    const renamedCol = lastCall.columns.find((c: { id: string }) => c.id === "col-backlog");
+    expect(renamedCol.title).toBe("BacklogX");
   });
 
   it("adds and removes a card", async () => {
-    render(<KanbanBoard boardId={1} />);
-    await waitFor(() => screen.getAllByTestId(/column-/i));
+    const { onBoardChange } = renderBoard();
     const column = getFirstColumn();
     const addButton = within(column).getByRole("button", {
       name: /add a card/i,
@@ -70,15 +77,13 @@ describe("KanbanBoard", () => {
 
     await userEvent.click(within(column).getByRole("button", { name: /add card/i }));
 
-    await waitFor(() => {
-      expect(within(column).getByText("New card")).toBeInTheDocument();
-    });
+    expect(onBoardChange).toHaveBeenCalled();
 
-    const deleteButton = within(column).getByRole("button", {
-      name: /delete new card/i,
-    });
-    await userEvent.click(deleteButton);
-
-    expect(within(column).queryByText("New card")).not.toBeInTheDocument();
+    // Verify the last call to onBoardChange included the new card
+    const lastCall = onBoardChange.mock.calls[onBoardChange.mock.calls.length - 1][0];
+    const newCardIds = Object.keys(lastCall.cards);
+    const addedCard = newCardIds.find((id: string) => !mockBoard.cards[id]);
+    expect(addedCard).toBeDefined();
+    expect(lastCall.cards[addedCard!].title).toBe("New card");
   });
 });

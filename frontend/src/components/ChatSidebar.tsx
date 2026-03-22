@@ -1,51 +1,114 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { sendChatMessage, getChatHistory, type ChatMessage } from "@/lib/api";
+import { processChat, type ChatAction } from "@/lib/chatEngine";
+import type { ChatMessage } from "@/lib/storage";
+import type { BoardData } from "@/lib/kanban";
 
 type ChatSidebarProps = {
   isOpen: boolean;
   onClose: () => void;
-  onBoardUpdate: () => void;
-  boardId: number;
+  board: BoardData;
+  messages: ChatMessage[];
+  onAction: (actions: ChatAction[]) => void;
+  onMessagesChange: (messages: ChatMessage[]) => void;
 };
 
-export const ChatSidebar = ({ isOpen, onClose, onBoardUpdate, boardId }: ChatSidebarProps) => {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+function renderInline(text: string, lineKey: number): React.ReactNode[] {
+  const nodes: React.ReactNode[] = [];
+  const regex = /\*\*(.+?)\*\*/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      nodes.push(text.slice(lastIndex, match.index));
+    }
+    nodes.push(
+      <strong key={`b-${lineKey}-${match.index}`}>{match[1]}</strong>
+    );
+    lastIndex = regex.lastIndex;
+  }
+
+  if (lastIndex < text.length) {
+    nodes.push(text.slice(lastIndex));
+  }
+
+  return nodes;
+}
+
+function renderMessage(content: string) {
+  const parts: React.ReactNode[] = [];
+  const lines = content.split("\n");
+
+  lines.forEach((line, lineIdx) => {
+    if (lineIdx > 0) {
+      parts.push(<br key={`br-${lineIdx}`} />);
+    }
+
+    // List items: "- item" or "  - item"
+    const listMatch = line.match(/^(\s*)-\s+(.*)$/);
+    if (listMatch) {
+      parts.push(
+        <span key={`li-${lineIdx}`} className="flex gap-1.5">
+          <span className="shrink-0">&bull;</span>
+          <span>{renderInline(listMatch[2], lineIdx)}</span>
+        </span>
+      );
+      return;
+    }
+
+    parts.push(
+      <span key={`line-${lineIdx}`}>{renderInline(line, lineIdx)}</span>
+    );
+  });
+
+  return <>{parts}</>;
+}
+
+export const ChatSidebar = ({
+  isOpen,
+  onClose,
+  board,
+  messages,
+  onAction,
+  onMessagesChange,
+}: ChatSidebarProps) => {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (isOpen) {
-      getChatHistory(boardId).then(setMessages);
-    }
-  }, [isOpen]);
-
-  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const text = input.trim();
-    if (!text || loading) return;
+  const sendMessage = (text: string) => {
+    if (!text.trim() || loading) return;
 
+    const userMsg: ChatMessage = { role: "user", content: text.trim() };
+    const withUser = [...messages, userMsg];
+    onMessagesChange(withUser);
     setInput("");
-    setMessages((prev) => [...prev, { role: "user", content: text }]);
     setLoading(true);
 
-    try {
-      const response = await sendChatMessage(boardId, text);
-      setMessages((prev) => [...prev, { role: "assistant", content: response.reply }]);
-      if (response.board_updates.length > 0) {
-        onBoardUpdate();
+    setTimeout(() => {
+      const result = processChat(text.trim(), board);
+      const assistantMsg: ChatMessage = {
+        role: "assistant",
+        content: result.reply,
+      };
+      const updated = [...withUser, assistantMsg];
+      onMessagesChange(updated);
+      if (result.actions.length > 0) {
+        onAction(result.actions);
       }
-    } catch {
-      setMessages((prev) => [...prev, { role: "assistant", content: "Failed to get a response." }]);
-    } finally {
       setLoading(false);
-    }
+    }, 300);
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    sendMessage(input);
   };
 
   return (
@@ -81,9 +144,30 @@ export const ChatSidebar = ({ isOpen, onClose, onBoardUpdate, boardId }: ChatSid
         <div className="flex-1 overflow-y-auto px-6 py-4">
           {messages.length === 0 && (
             <p className="text-center text-sm text-[var(--gray-text)]">
-              Ask the AI to help manage your board. It can create, move, update, or delete cards.
+              Ask the AI to help manage your board. It can create, move, update,
+              or delete cards.
             </p>
           )}
+
+          <div className="mb-4 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => sendMessage("show board")}
+              disabled={loading}
+              className="rounded-full border border-[var(--stroke)] px-3 py-1.5 text-xs font-semibold text-[var(--gray-text)] transition hover:border-[var(--primary-blue)] hover:text-[var(--primary-blue)] disabled:opacity-50"
+            >
+              Show board
+            </button>
+            <button
+              type="button"
+              onClick={() => sendMessage("help")}
+              disabled={loading}
+              className="rounded-full border border-[var(--stroke)] px-3 py-1.5 text-xs font-semibold text-[var(--gray-text)] transition hover:border-[var(--primary-blue)] hover:text-[var(--primary-blue)] disabled:opacity-50"
+            >
+              Help
+            </button>
+          </div>
+
           <div className="space-y-4">
             {messages.map((msg, i) => (
               <div
@@ -97,7 +181,9 @@ export const ChatSidebar = ({ isOpen, onClose, onBoardUpdate, boardId }: ChatSid
                       : "border border-[var(--stroke)] bg-[var(--surface)] text-[var(--navy-dark)]"
                   }`}
                 >
-                  {msg.content}
+                  {msg.role === "assistant"
+                    ? renderMessage(msg.content)
+                    : msg.content}
                 </div>
               </div>
             ))}
