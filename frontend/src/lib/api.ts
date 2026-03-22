@@ -82,6 +82,20 @@ export async function moveCard(cardId: string, columnId: string, position: numbe
   });
 }
 
+export type GenerateResponse = {
+  board_id: number;
+  board_name: string;
+  card_count: number;
+  column_names: string[];
+};
+
+export async function generateBoard(prompt: string, boardName?: string): Promise<GenerateResponse> {
+  return apiFetch("/api/boards/generate", {
+    method: "POST",
+    body: JSON.stringify({ prompt, board_name: boardName || "" }),
+  });
+}
+
 export type ChatMessage = { role: "user" | "assistant"; content: string };
 export type BoardUpdate = {
   action: string;

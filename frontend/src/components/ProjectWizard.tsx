@@ -5,6 +5,7 @@ import { useState } from "react";
 type ProjectWizardProps = {
   onComplete: (name: string, columns: string[]) => void;
   onCancel: () => void;
+  onAIGenerate?: (prompt: string, boardName: string) => Promise<void>;
 };
 
 type Template = {
@@ -62,16 +63,29 @@ const templates: Template[] = [
       </svg>
     ),
   },
+  {
+    id: "ai-generate",
+    label: "AI Generate",
+    columns: [],
+    icon: (
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" />
+      </svg>
+    ),
+  },
 ];
 
 const MAX_COLUMNS = 8;
 const MIN_COLUMNS = 2;
 
-export const ProjectWizard = ({ onComplete, onCancel }: ProjectWizardProps) => {
+export const ProjectWizard = ({ onComplete, onCancel, onAIGenerate }: ProjectWizardProps) => {
   const [step, setStep] = useState(1);
   const [projectName, setProjectName] = useState("");
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
   const [customColumns, setCustomColumns] = useState(["", "", ""]);
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [aiGenerating, setAiGenerating] = useState(false);
+  const [aiError, setAiError] = useState("");
 
   const selectedTemplateDef = templates.find((t) => t.id === selectedTemplate);
 
@@ -87,7 +101,9 @@ export const ProjectWizard = ({ onComplete, onCancel }: ProjectWizardProps) => {
 
   const handleNext = () => {
     if (step === 1) {
-      if (selectedTemplate === "custom") {
+      if (selectedTemplate === "ai-generate") {
+        setStep(4); // AI prompt step
+      } else if (selectedTemplate === "custom") {
         setStep(2);
       } else {
         setStep(3);
@@ -102,11 +118,25 @@ export const ProjectWizard = ({ onComplete, onCancel }: ProjectWizardProps) => {
       setStep(selectedTemplate === "custom" ? 2 : 1);
     } else if (step === 2) {
       setStep(1);
+    } else if (step === 4) {
+      setStep(1);
     }
   };
 
   const handleCreate = () => {
     onComplete(projectName.trim(), resolvedColumns);
+  };
+
+  const handleAIGenerate = async () => {
+    if (!onAIGenerate || !aiPrompt.trim()) return;
+    setAiGenerating(true);
+    setAiError("");
+    try {
+      await onAIGenerate(aiPrompt.trim(), projectName.trim());
+    } catch {
+      setAiError("Failed to generate board. Please try again.");
+      setAiGenerating(false);
+    }
   };
 
   const handleAddColumn = () => {
@@ -127,7 +157,9 @@ export const ProjectWizard = ({ onComplete, onCancel }: ProjectWizardProps) => {
     setCustomColumns(updated);
   };
 
-  const stepLabels = ["Details", "Columns", "Review"];
+  const stepLabels = selectedTemplate === "ai-generate"
+    ? ["Details", "Prompt", "Generate"]
+    : ["Details", "Columns", "Review"];
 
   return (
     <div
@@ -145,8 +177,10 @@ export const ProjectWizard = ({ onComplete, onCancel }: ProjectWizardProps) => {
         <div className="mb-8 flex items-center justify-center gap-0">
           {stepLabels.map((label, i) => {
             const stepNum = i + 1;
-            const isActive = step === stepNum;
-            const isCompleted = step > stepNum;
+            // For AI flow, step 4 maps to visual step 2
+            const visualStep = selectedTemplate === "ai-generate" && step === 4 ? 2 : step;
+            const isActive = visualStep === stepNum;
+            const isCompleted = visualStep > stepNum;
             return (
               <div key={label} className="flex items-center">
                 {i > 0 && (
@@ -291,6 +325,14 @@ export const ProjectWizard = ({ onComplete, onCancel }: ProjectWizardProps) => {
                         style={{ color: "var(--gray-text)" }}
                       >
                         Define your own columns
+                      </span>
+                    )}
+                    {t.id === "ai-generate" && (
+                      <span
+                        className="text-[11px]"
+                        style={{ color: "var(--gray-text)" }}
+                      >
+                        Describe your project &amp; AI builds the board
                       </span>
                     )}
                   </button>
@@ -505,6 +547,99 @@ export const ProjectWizard = ({ onComplete, onCancel }: ProjectWizardProps) => {
                 style={{ backgroundColor: "var(--primary-blue)" }}
               >
                 Create Project
+              </button>
+            </div>
+          </div>
+        )}
+        {/* Step 4: AI Prompt */}
+        {step === 4 && (
+          <div>
+            <h2
+              className="font-display mb-1 text-xl font-bold"
+              style={{ color: "var(--navy-dark)" }}
+            >
+              Describe your project
+            </h2>
+            <p
+              className="mb-4 text-sm"
+              style={{ color: "var(--gray-text)" }}
+            >
+              Paste a detailed project description, list of tasks, or workstream
+              breakdown. AI will create columns and cards automatically.
+            </p>
+
+            <textarea
+              value={aiPrompt}
+              onChange={(e) => setAiPrompt(e.target.value)}
+              placeholder={"Describe your project, workstreams, and tasks...\n\nExample: Generate Kanban cards for a website redesign project with workstreams for Design, Development, Content, and QA. Include tasks for wireframing, responsive layout, CMS migration, and browser testing."}
+              rows={10}
+              className="mb-4 w-full resize-y rounded-xl border px-4 py-3 text-sm outline-none transition-colors"
+              style={{
+                borderColor: "var(--stroke)",
+                backgroundColor: "var(--surface)",
+                color: "var(--navy-dark)",
+                minHeight: "160px",
+                maxHeight: "400px",
+              }}
+              onFocus={(e) =>
+                (e.currentTarget.style.borderColor = "var(--primary-blue)")
+              }
+              onBlur={(e) =>
+                (e.currentTarget.style.borderColor = "var(--stroke)")
+              }
+              disabled={aiGenerating}
+            />
+
+            <div
+              className="mb-4 rounded-xl border p-4 text-xs"
+              style={{
+                borderColor: "var(--stroke)",
+                backgroundColor: "var(--surface)",
+                color: "var(--gray-text)",
+              }}
+            >
+              <span className="font-semibold" style={{ color: "var(--navy-dark)" }}>
+                Tips for best results:
+              </span>
+              <ul className="mt-2 space-y-1">
+                <li>&bull; Specify workstreams or categories for column names</li>
+                <li>&bull; List specific tasks you want as cards</li>
+                <li>&bull; Include priority levels (High / Medium / Low)</li>
+                <li>&bull; Mention dependencies between tasks</li>
+              </ul>
+            </div>
+
+            {aiError && (
+              <p className="mb-4 text-sm text-red-600">{aiError}</p>
+            )}
+
+            <div className="mt-6 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={handleBack}
+                disabled={aiGenerating}
+                className="rounded-full px-5 py-2 text-xs font-semibold uppercase tracking-wide disabled:opacity-40"
+                style={{ color: "var(--gray-text)" }}
+              >
+                Back
+              </button>
+              <button
+                type="button"
+                onClick={handleAIGenerate}
+                disabled={aiGenerating || !aiPrompt.trim()}
+                className="flex items-center gap-2 rounded-full px-6 py-2.5 text-xs font-semibold uppercase tracking-wide text-white transition-opacity disabled:opacity-40"
+                style={{ backgroundColor: "var(--secondary-purple)" }}
+              >
+                {aiGenerating ? (
+                  <>
+                    <span
+                      className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent"
+                    />
+                    Generating...
+                  </>
+                ) : (
+                  "Generate Board"
+                )}
               </button>
             </div>
           </div>

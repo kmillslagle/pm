@@ -5,7 +5,7 @@ import { KanbanBoard } from "@/components/KanbanBoard";
 import { LoginForm } from "@/components/LoginForm";
 import { ChatSidebar } from "@/components/ChatSidebar";
 import { ProjectWizard } from "@/components/ProjectWizard";
-import { getMe, logout, listBoards, createBoard, type BoardInfo } from "@/lib/api";
+import { getMe, logout, listBoards, createBoard, generateBoard, type BoardInfo } from "@/lib/api";
 
 export default function Home() {
   const [user, setUser] = useState<string | null>(null);
@@ -48,6 +48,15 @@ export default function Home() {
     } catch {
       // Board creation failed
     }
+  };
+
+  const handleAIGenerate = async (prompt: string, boardName: string) => {
+    const result = await generateBoard(prompt, boardName);
+    const updatedBoards = await listBoards();
+    setBoards(updatedBoards);
+    setActiveBoardId(result.board_id);
+    setShowWizard(false);
+    setBoardKey((k) => k + 1);
   };
 
   const handleChatCreateProject = useCallback(() => {
@@ -153,6 +162,7 @@ export default function Home() {
         <ProjectWizard
           onComplete={handleCreateProject}
           onCancel={() => setShowWizard(false)}
+          onAIGenerate={handleAIGenerate}
         />
       )}
     </>
