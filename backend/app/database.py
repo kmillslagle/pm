@@ -1,3 +1,4 @@
+import hashlib
 import sqlite3
 from pathlib import Path
 
@@ -43,14 +44,45 @@ def init_db() -> None:
             content TEXT NOT NULL,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
-        INSERT OR IGNORE INTO users (id, username, password) VALUES (1, 'user', 'password');
-        INSERT OR IGNORE INTO boards (id, user_id, name) VALUES (1, 1, 'My Board');
+        CREATE TABLE IF NOT EXISTS sessions (
+            token TEXT PRIMARY KEY,
+            username TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+    """)
+
+    # Seed user with hashed password
+    seed_salt = "seed"
+    seed_hash = hashlib.sha256((seed_salt + "password").encode()).hexdigest()
+    conn.execute(
+        "INSERT OR IGNORE INTO users (id, username, password) VALUES (1, 'user', ?)",
+        (f"{seed_salt}:{seed_hash}",),
+    )
+    conn.execute("INSERT OR IGNORE INTO boards (id, user_id, name) VALUES (1, 1, 'My Board')")
+    conn.execute("""
         INSERT OR IGNORE INTO board_columns (id, board_id, title, position) VALUES
             ('col-backlog', 1, 'Backlog', 0),
             ('col-discovery', 1, 'Discovery', 1),
             ('col-progress', 1, 'In Progress', 2),
             ('col-review', 1, 'Review', 3),
-            ('col-done', 1, 'Done', 4);
+            ('col-done', 1, 'Done', 4)
     """)
+    conn.commit()
+
+    # Migrations — add columns if they don't exist
+    for col_def in [
+        ("priority", "TEXT NOT NULL DEFAULT 'none'"),
+        ("notes", "TEXT NOT NULL DEFAULT ''"),
+        ("due_date", "TEXT"),
+        ("subtasks", "TEXT NOT NULL DEFAULT '[]'"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE cards ADD COLUMN {col_def[0]} {col_def[1]}")
+        except Exception:
+            pass
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
+    except Exception:
+        pass
     conn.commit()
     conn.close()

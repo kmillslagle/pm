@@ -22,10 +22,13 @@ class CardAction(BaseModel):
     title: str | None = None
     details: str | None = None
     position: int | None = None
+    priority: str | None = None
+    notes: str | None = None
 
 class ChatResponse(BaseModel):
     reply: str
     board_updates: list[CardAction] = []
+    create_board: dict | None = None
 
 
 def _get_board_json(board_id: int) -> dict:
@@ -38,12 +41,17 @@ def _get_board_json(board_id: int) -> dict:
     cards = {}
     for col in cols:
         card_rows = conn.execute(
-            "SELECT id, title, details FROM cards WHERE column_id = ? ORDER BY position",
+            "SELECT id, title, details, priority, notes, due_date, subtasks "
+            "FROM cards WHERE column_id = ? ORDER BY position",
             (col["id"],)
         ).fetchall()
         card_ids = []
         for card in card_rows:
-            cards[card["id"]] = {"id": card["id"], "title": card["title"], "details": card["details"]}
+            cards[card["id"]] = {
+                "id": card["id"], "title": card["title"], "details": card["details"],
+                "priority": card["priority"], "notes": card["notes"],
+                "due_date": card["due_date"], "subtasks": card["subtasks"],
+            }
             card_ids.append(card["id"])
         columns.append({"id": col["id"], "title": col["title"], "cardIds": card_ids})
     conn.close()
@@ -93,8 +101,10 @@ def _apply_board_updates(board_id: int, updates: list[CardAction]) -> None:
             ).fetchone()["p"]
             card_id = f"card-{secrets.token_hex(4)}"
             conn.execute(
-                "INSERT INTO cards (id, column_id, title, details, position) VALUES (?, ?, ?, ?, ?)",
-                (card_id, update.column_id, update.title, update.details or "", max_pos + 1)
+                "INSERT INTO cards (id, column_id, title, details, position, priority, notes) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (card_id, update.column_id, update.title, update.details or "",
+                 max_pos + 1, update.priority or "none", update.notes or "")
             )
         elif update.action == "update" and update.card_id:
             sets = []
@@ -105,6 +115,12 @@ def _apply_board_updates(board_id: int, updates: list[CardAction]) -> None:
             if update.details is not None:
                 sets.append("details = ?")
                 params.append(update.details)
+            if update.priority is not None:
+                sets.append("priority = ?")
+                params.append(update.priority)
+            if update.notes is not None:
+                sets.append("notes = ?")
+                params.append(update.notes)
             if sets:
                 params.append(update.card_id)
                 conn.execute(f"UPDATE cards SET {', '.join(sets)} WHERE id = ?", params)
@@ -137,15 +153,35 @@ You will be given the current state of the user's Kanban board as JSON, along wi
 You can respond with text AND optionally make changes to the board. When you want to make board changes, include them in the board_updates array.
 
 Available board update actions:
-- {"action": "create", "column_id": "<column-id>", "title": "<card-title>", "details": "<card-details>"}
-- {"action": "update", "card_id": "<card-id>", "title": "<new-title>", "details": "<new-details>"}
+- {"action": "create", "column_id": "<column-id>", "title": "<card-title>", "details": "<card-details>", "priority": "<high|medium|low|none>", "notes": "<notes>"}
+- {"action": "update", "card_id": "<card-id>", "title": "<new-title>", "details": "<new-details>", "priority": "<priority>", "notes": "<notes>"}
 - {"action": "move", "card_id": "<card-id>", "column_id": "<target-column-id>", "position": <position>}
 - {"action": "delete", "card_id": "<card-id>"}
+
+You can also create an entirely new board when the user describes a project they want to plan. To do this, include a "create_board" object in your response:
+{
+  "reply": "your message",
+  "board_updates": [],
+  "create_board": {
+    "name": "Board Name",
+    "columns": [
+      {"title": "Column 1", "cards": [{"title": "Card title", "details": "Card details"}, ...]},
+      ...
+    ]
+  }
+}
+
+When the user wants to build a new board:
+- Ask clarifying questions if the request is ambiguous (e.g., project name, key workstreams, priorities)
+- Do not create the board until you have a project name and clear understanding of the work
+- Default to 5 columns unless the user specifies otherwise
+- Generate detailed card titles and descriptions based on the user's requirements
 
 Always respond with valid JSON matching this schema:
 {
   "reply": "your message to the user",
-  "board_updates": [... optional array of actions]
+  "board_updates": [... optional array of actions],
+  "create_board": null or {... board definition}
 }
 
 Be concise and helpful. When the user asks you to create, move, or modify cards, do it via board_updates."""
@@ -179,7 +215,7 @@ def chat(body: ChatRequest, request: Request, board_id: int = Query(...)) -> Cha
 
     response = client.messages.create(
         model=MODEL,
-        max_tokens=1024,
+        max_tokens=4096,
         system=SYSTEM_PROMPT,
         messages=messages,
     )
@@ -193,13 +229,14 @@ def chat(body: ChatRequest, request: Request, board_id: int = Query(...)) -> Cha
     reply = parsed.get("reply", "I could not generate a response.")
     board_updates_raw = parsed.get("board_updates", [])
     board_updates = [CardAction(**u) for u in board_updates_raw if isinstance(u, dict)]
+    create_board_data = parsed.get("create_board", None)
 
     if board_updates:
         _apply_board_updates(board_id, board_updates)
 
     _save_message(board_id, "assistant", reply)
 
-    return ChatResponse(reply=reply, board_updates=board_updates)
+    return ChatResponse(reply=reply, board_updates=board_updates, create_board=create_board_data)
 
 
 @router.get("/chat/history")
