@@ -22,6 +22,13 @@ export async function login(username: string, password: string): Promise<{ usern
   });
 }
 
+export async function register(username: string, password: string): Promise<{ username: string }> {
+  return apiFetch("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ username, password }),
+  });
+}
+
 export async function logout(): Promise<void> {
   await apiFetch("/api/auth/logout", { method: "POST" });
 }
@@ -33,9 +40,21 @@ export async function getMe(): Promise<{ username: string }> {
 export type Card = { id: string; title: string; details: string };
 export type Column = { id: string; title: string; cardIds: string[] };
 export type BoardData = { columns: Column[]; cards: Record<string, Card> };
+export type BoardInfo = { id: number; name: string };
 
-export async function getBoard(): Promise<BoardData> {
-  return apiFetch("/api/board");
+export async function listBoards(): Promise<BoardInfo[]> {
+  return apiFetch("/api/boards");
+}
+
+export async function createBoard(name: string): Promise<BoardInfo> {
+  return apiFetch("/api/boards", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function getBoard(boardId: number): Promise<BoardData> {
+  return apiFetch(`/api/boards/${boardId}`);
 }
 
 export async function renameColumn(columnId: string, title: string): Promise<void> {
@@ -74,13 +93,13 @@ export type BoardUpdate = {
 };
 export type ChatResponse = { reply: string; board_updates: BoardUpdate[] };
 
-export async function sendChatMessage(message: string): Promise<ChatResponse> {
-  return apiFetch("/api/chat", {
+export async function sendChatMessage(boardId: number, message: string): Promise<ChatResponse> {
+  return apiFetch(`/api/chat?board_id=${boardId}`, {
     method: "POST",
     body: JSON.stringify({ message }),
   });
 }
 
-export async function getChatHistory(): Promise<ChatMessage[]> {
-  return apiFetch("/api/chat/history");
+export async function getChatHistory(boardId: number): Promise<ChatMessage[]> {
+  return apiFetch(`/api/chat/history?board_id=${boardId}`);
 }

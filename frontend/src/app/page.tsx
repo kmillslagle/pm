@@ -4,13 +4,18 @@ import { useCallback, useEffect, useState } from "react";
 import { KanbanBoard } from "@/components/KanbanBoard";
 import { LoginForm } from "@/components/LoginForm";
 import { ChatSidebar } from "@/components/ChatSidebar";
-import { getMe, logout } from "@/lib/api";
+import { getMe, logout, listBoards, createBoard, type BoardInfo } from "@/lib/api";
 
 export default function Home() {
   const [user, setUser] = useState<string | null>(null);
   const [checking, setChecking] = useState(true);
   const [chatOpen, setChatOpen] = useState(false);
   const [boardKey, setBoardKey] = useState(0);
+  const [boards, setBoards] = useState<BoardInfo[]>([]);
+  const [activeBoardId, setActiveBoardId] = useState<number | null>(null);
+  const [showNewProject, setShowNewProject] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [creatingProject, setCreatingProject] = useState(false);
 
   useEffect(() => {
     getMe()
@@ -19,9 +24,35 @@ export default function Home() {
       .finally(() => setChecking(false));
   }, []);
 
+  useEffect(() => {
+    if (user) {
+      listBoards().then((b) => {
+        setBoards(b);
+        if (b.length > 0 && activeBoardId === null) {
+          setActiveBoardId(b[0].id);
+        }
+      });
+    }
+  }, [user, activeBoardId]);
+
   const handleBoardUpdate = useCallback(() => {
     setBoardKey((k) => k + 1);
   }, []);
+
+  const handleCreateProject = async () => {
+    const name = newProjectName.trim();
+    if (!name || creatingProject) return;
+    setCreatingProject(true);
+    try {
+      const board = await createBoard(name);
+      setBoards((prev) => [...prev, board]);
+      setActiveBoardId(board.id);
+      setNewProjectName("");
+      setShowNewProject(false);
+    } finally {
+      setCreatingProject(false);
+    }
+  };
 
   if (checking) {
     return null;
@@ -34,10 +65,71 @@ export default function Home() {
   const handleLogout = async () => {
     await logout();
     setUser(null);
+    setBoards([]);
+    setActiveBoardId(null);
   };
 
   return (
     <>
+      <div className="fixed left-6 top-4 z-30 flex items-center gap-3">
+        <select
+          value={activeBoardId ?? ""}
+          onChange={(e) => {
+            setActiveBoardId(Number(e.target.value));
+            setBoardKey((k) => k + 1);
+          }}
+          className="rounded-full border border-[var(--stroke)] bg-white px-4 py-2 text-sm font-semibold text-[var(--navy-dark)] outline-none transition focus:border-[var(--primary-blue)]"
+        >
+          {boards.map((b) => (
+            <option key={b.id} value={b.id}>
+              {b.name}
+            </option>
+          ))}
+        </select>
+        {showNewProject ? (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleCreateProject();
+            }}
+            className="flex items-center gap-2"
+          >
+            <input
+              type="text"
+              value={newProjectName}
+              onChange={(e) => setNewProjectName(e.target.value)}
+              placeholder="Project name"
+              className="rounded-full border border-[var(--stroke)] bg-white px-4 py-2 text-sm text-[var(--navy-dark)] outline-none transition focus:border-[var(--primary-blue)]"
+              autoFocus
+              required
+            />
+            <button
+              type="submit"
+              disabled={creatingProject}
+              className="rounded-full bg-[var(--primary-blue)] px-4 py-2 text-xs font-semibold uppercase tracking-wide text-white transition hover:brightness-110 disabled:opacity-50"
+            >
+              {creatingProject ? "..." : "Add"}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowNewProject(false);
+                setNewProjectName("");
+              }}
+              className="rounded-full border border-[var(--stroke)] bg-white px-3 py-2 text-xs font-semibold text-[var(--gray-text)] transition hover:text-[var(--navy-dark)]"
+            >
+              Cancel
+            </button>
+          </form>
+        ) : (
+          <button
+            onClick={() => setShowNewProject(true)}
+            className="rounded-full border border-[var(--stroke)] bg-white px-4 py-2 text-xs font-semibold uppercase tracking-wide text-[var(--gray-text)] transition hover:text-[var(--navy-dark)]"
+          >
+            + New Project
+          </button>
+        )}
+      </div>
       <div className="fixed right-6 top-4 z-30 flex items-center gap-3">
         <button
           onClick={() => setChatOpen(true)}
@@ -52,12 +144,17 @@ export default function Home() {
           Sign out
         </button>
       </div>
-      <KanbanBoard key={boardKey} />
-      <ChatSidebar
-        isOpen={chatOpen}
-        onClose={() => setChatOpen(false)}
-        onBoardUpdate={handleBoardUpdate}
-      />
+      {activeBoardId && (
+        <>
+          <KanbanBoard key={`${activeBoardId}-${boardKey}`} boardId={activeBoardId} />
+          <ChatSidebar
+            isOpen={chatOpen}
+            onClose={() => setChatOpen(false)}
+            onBoardUpdate={handleBoardUpdate}
+            boardId={activeBoardId}
+          />
+        </>
+      )}
     </>
   );
 }

@@ -33,22 +33,72 @@ class BoardResponse(BaseModel):
     cards: dict[str, dict]
 
 
-def _get_board_id(username: str) -> int:
+class BoardInfo(BaseModel):
+    id: int
+    name: str
+
+
+class BoardCreate(BaseModel):
+    name: str
+
+
+def _verify_board_owner(board_id: int, username: str) -> None:
+    """Verify the board belongs to the given user."""
     conn = get_connection()
     row = conn.execute(
-        "SELECT b.id FROM boards b JOIN users u ON b.user_id = u.id WHERE u.username = ?",
-        (username,),
+        "SELECT b.id FROM boards b JOIN users u ON b.user_id = u.id "
+        "WHERE b.id = ? AND u.username = ?",
+        (board_id, username),
     ).fetchone()
     conn.close()
     if not row:
         raise HTTPException(status_code=404, detail="Board not found")
-    return row["id"]
 
 
-@router.get("/board")
-def get_board(request: Request) -> BoardResponse:
+@router.get("/boards")
+def list_boards(request: Request) -> list[BoardInfo]:
     username = get_current_user(request)
-    board_id = _get_board_id(username)
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT b.id, b.name FROM boards b JOIN users u ON b.user_id = u.id "
+        "WHERE u.username = ? ORDER BY b.id",
+        (username,),
+    ).fetchall()
+    conn.close()
+    return [BoardInfo(id=row["id"], name=row["name"]) for row in rows]
+
+
+@router.post("/boards")
+def create_board(body: BoardCreate, request: Request) -> BoardInfo:
+    username = get_current_user(request)
+    if len(body.name.strip()) < 1:
+        raise HTTPException(status_code=400, detail="Board name is required")
+    conn = get_connection()
+    user_row = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
+    conn.execute(
+        "INSERT INTO boards (user_id, name) VALUES (?, ?)",
+        (user_row["id"], body.name.strip()),
+    )
+    board_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    conn.executemany(
+        "INSERT INTO board_columns (id, board_id, title, position) VALUES (?, ?, ?, ?)",
+        [
+            (f"col-{secrets.token_hex(4)}", board_id, "Backlog", 0),
+            (f"col-{secrets.token_hex(4)}", board_id, "Discovery", 1),
+            (f"col-{secrets.token_hex(4)}", board_id, "In Progress", 2),
+            (f"col-{secrets.token_hex(4)}", board_id, "Review", 3),
+            (f"col-{secrets.token_hex(4)}", board_id, "Done", 4),
+        ],
+    )
+    conn.commit()
+    conn.close()
+    return BoardInfo(id=board_id, name=body.name.strip())
+
+
+@router.get("/boards/{board_id}")
+def get_board(board_id: int, request: Request) -> BoardResponse:
+    username = get_current_user(request)
+    _verify_board_owner(board_id, username)
     conn = get_connection()
 
     cols = conn.execute(
@@ -73,32 +123,50 @@ def get_board(request: Request) -> BoardResponse:
     return BoardResponse(columns=columns, cards=cards)
 
 
+# Keep the old endpoint for backwards compatibility during transition
+@router.get("/board")
+def get_board_legacy(request: Request) -> BoardResponse:
+    username = get_current_user(request)
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT b.id FROM boards b JOIN users u ON b.user_id = u.id WHERE u.username = ?",
+        (username,),
+    ).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="Board not found")
+    return get_board(row["id"], request)
+
+
 @router.put("/columns/{column_id}")
 def update_column(column_id: str, body: ColumnUpdate, request: Request) -> dict:
     username = get_current_user(request)
-    board_id = _get_board_id(username)
     conn = get_connection()
-    result = conn.execute(
-        "UPDATE board_columns SET title = ? WHERE id = ? AND board_id = ?",
-        (body.title, column_id, board_id),
-    )
+    # Verify column belongs to a board owned by this user
+    row = conn.execute(
+        "SELECT bc.id FROM board_columns bc JOIN boards b ON bc.board_id = b.id "
+        "JOIN users u ON b.user_id = u.id WHERE bc.id = ? AND u.username = ?",
+        (column_id, username),
+    ).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Column not found")
+    conn.execute("UPDATE board_columns SET title = ? WHERE id = ?", (body.title, column_id))
     conn.commit()
     conn.close()
-    if result.rowcount == 0:
-        raise HTTPException(status_code=404, detail="Column not found")
     return {"status": "ok"}
 
 
 @router.post("/columns/{column_id}/cards")
 def create_card(column_id: str, body: CardCreate, request: Request) -> dict:
     username = get_current_user(request)
-    board_id = _get_board_id(username)
     conn = get_connection()
 
-    # Verify column belongs to this board
+    # Verify column belongs to a board owned by this user
     col = conn.execute(
-        "SELECT id FROM board_columns WHERE id = ? AND board_id = ?",
-        (column_id, board_id),
+        "SELECT bc.id FROM board_columns bc JOIN boards b ON bc.board_id = b.id "
+        "JOIN users u ON b.user_id = u.id WHERE bc.id = ? AND u.username = ?",
+        (column_id, username),
     ).fetchone()
     if not col:
         conn.close()
@@ -123,9 +191,14 @@ def create_card(column_id: str, body: CardCreate, request: Request) -> dict:
 @router.put("/cards/{card_id}")
 def update_card(card_id: str, body: CardUpdate, request: Request) -> dict:
     username = get_current_user(request)
-    _get_board_id(username)
     conn = get_connection()
-    card = conn.execute("SELECT * FROM cards WHERE id = ?", (card_id,)).fetchone()
+    # Verify card belongs to user via column -> board -> user chain
+    card = conn.execute(
+        "SELECT c.* FROM cards c JOIN board_columns bc ON c.column_id = bc.id "
+        "JOIN boards b ON bc.board_id = b.id JOIN users u ON b.user_id = u.id "
+        "WHERE c.id = ? AND u.username = ?",
+        (card_id, username),
+    ).fetchone()
     if not card:
         conn.close()
         raise HTTPException(status_code=404, detail="Card not found")
@@ -141,31 +214,44 @@ def update_card(card_id: str, body: CardUpdate, request: Request) -> dict:
 @router.delete("/cards/{card_id}")
 def delete_card(card_id: str, request: Request) -> dict:
     username = get_current_user(request)
-    _get_board_id(username)
     conn = get_connection()
-    result = conn.execute("DELETE FROM cards WHERE id = ?", (card_id,))
+    # Verify card belongs to user
+    card = conn.execute(
+        "SELECT c.id FROM cards c JOIN board_columns bc ON c.column_id = bc.id "
+        "JOIN boards b ON bc.board_id = b.id JOIN users u ON b.user_id = u.id "
+        "WHERE c.id = ? AND u.username = ?",
+        (card_id, username),
+    ).fetchone()
+    if not card:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Card not found")
+    conn.execute("DELETE FROM cards WHERE id = ?", (card_id,))
     conn.commit()
     conn.close()
-    if result.rowcount == 0:
-        raise HTTPException(status_code=404, detail="Card not found")
     return {"status": "ok"}
 
 
 @router.put("/cards/{card_id}/move")
 def move_card(card_id: str, body: CardMove, request: Request) -> dict:
     username = get_current_user(request)
-    board_id = _get_board_id(username)
     conn = get_connection()
 
-    card = conn.execute("SELECT * FROM cards WHERE id = ?", (card_id,)).fetchone()
+    # Verify card belongs to user
+    card = conn.execute(
+        "SELECT c.* FROM cards c JOIN board_columns bc ON c.column_id = bc.id "
+        "JOIN boards b ON bc.board_id = b.id JOIN users u ON b.user_id = u.id "
+        "WHERE c.id = ? AND u.username = ?",
+        (card_id, username),
+    ).fetchone()
     if not card:
         conn.close()
         raise HTTPException(status_code=404, detail="Card not found")
 
-    # Verify target column belongs to this board
+    # Verify target column belongs to a board owned by this user
     col = conn.execute(
-        "SELECT id FROM board_columns WHERE id = ? AND board_id = ?",
-        (body.column_id, board_id),
+        "SELECT bc.id FROM board_columns bc JOIN boards b ON bc.board_id = b.id "
+        "JOIN users u ON b.user_id = u.id WHERE bc.id = ? AND u.username = ?",
+        (body.column_id, username),
     ).fetchone()
     if not col:
         conn.close()

@@ -7,9 +7,10 @@ type ChatSidebarProps = {
   isOpen: boolean;
   onClose: () => void;
   onBoardUpdate: () => void;
+  boardId: number;
 };
 
-export const ChatSidebar = ({ isOpen, onClose, onBoardUpdate }: ChatSidebarProps) => {
+export const ChatSidebar = ({ isOpen, onClose, onBoardUpdate, boardId }: ChatSidebarProps) => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -17,7 +18,7 @@ export const ChatSidebar = ({ isOpen, onClose, onBoardUpdate }: ChatSidebarProps
 
   useEffect(() => {
     if (isOpen) {
-      getChatHistory().then(setMessages);
+      getChatHistory(boardId).then(setMessages);
     }
   }, [isOpen]);
 
@@ -35,7 +36,7 @@ export const ChatSidebar = ({ isOpen, onClose, onBoardUpdate }: ChatSidebarProps
     setLoading(true);
 
     try {
-      const response = await sendChatMessage(text);
+      const response = await sendChatMessage(boardId, text);
       setMessages((prev) => [...prev, { role: "assistant", content: response.reply }]);
       if (response.board_updates.length > 0) {
         onBoardUpdate();

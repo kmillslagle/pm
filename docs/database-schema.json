@@ -5,7 +5,7 @@
       "columns": {
         "id": "INTEGER PRIMARY KEY AUTOINCREMENT",
         "username": "TEXT UNIQUE NOT NULL",
-        "password": "TEXT NOT NULL"
+        "password": "TEXT NOT NULL (salted:hashed format for new accounts, plain text for legacy seed)"
       }
     },
     "boards": {
@@ -13,10 +13,10 @@
         "id": "INTEGER PRIMARY KEY AUTOINCREMENT",
         "user_id": "INTEGER NOT NULL REFERENCES users(id)",
         "name": "TEXT NOT NULL DEFAULT 'My Board'"
-      }
+      },
+      "notes": "Each user can have multiple boards (projects). New boards are created with 5 default columns."
     },
-    "columns_table": {
-      "actual_name": "columns",
+    "board_columns": {
       "columns": {
         "id": "TEXT PRIMARY KEY",
         "board_id": "INTEGER NOT NULL REFERENCES boards(id)",
@@ -27,7 +27,7 @@
     "cards": {
       "columns": {
         "id": "TEXT PRIMARY KEY",
-        "column_id": "TEXT NOT NULL REFERENCES columns(id)",
+        "column_id": "TEXT NOT NULL REFERENCES board_columns(id)",
         "title": "TEXT NOT NULL",
         "details": "TEXT NOT NULL DEFAULT ''",
         "position": "INTEGER NOT NULL"
@@ -40,7 +40,8 @@
         "role": "TEXT NOT NULL CHECK(role IN ('user', 'assistant'))",
         "content": "TEXT NOT NULL",
         "created_at": "TEXT NOT NULL DEFAULT (datetime('now'))"
-      }
+      },
+      "notes": "Chat history is scoped per board/project."
     }
   }
 }

@@ -38,14 +38,14 @@ const getFirstColumn = () => screen.getAllByTestId(/column-/i)[0];
 
 describe("KanbanBoard", () => {
   it("renders five columns", async () => {
-    render(<KanbanBoard />);
+    render(<KanbanBoard boardId={1} />);
     await waitFor(() => {
       expect(screen.getAllByTestId(/column-/i)).toHaveLength(5);
     });
   });
 
   it("renames a column", async () => {
-    render(<KanbanBoard />);
+    render(<KanbanBoard boardId={1} />);
     await waitFor(() => screen.getAllByTestId(/column-/i));
     const column = getFirstColumn();
     const input = within(column).getByLabelText("Column title");
@@ -55,7 +55,7 @@ describe("KanbanBoard", () => {
   });
 
   it("adds and removes a card", async () => {
-    render(<KanbanBoard />);
+    render(<KanbanBoard boardId={1} />);
     await waitFor(() => screen.getAllByTestId(/column-/i));
     const column = getFirstColumn();
     const addButton = within(column).getByRole("button", {

@@ -1,7 +1,7 @@
 import json
 import os
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from app.auth import get_current_user
@@ -50,14 +50,16 @@ def _get_board_json(board_id: int) -> dict:
     return {"columns": columns, "cards": cards}
 
 
-def _get_board_id(username: str) -> int:
+def _verify_board_owner(board_id: int, username: str) -> None:
     conn = get_connection()
     row = conn.execute(
-        "SELECT b.id FROM boards b JOIN users u ON b.user_id = u.id WHERE u.username = ?",
-        (username,)
+        "SELECT b.id FROM boards b JOIN users u ON b.user_id = u.id "
+        "WHERE b.id = ? AND u.username = ?",
+        (board_id, username),
     ).fetchone()
     conn.close()
-    return row["id"]
+    if not row:
+        raise HTTPException(status_code=404, detail="Board not found")
 
 
 def _get_chat_history(board_id: int, limit: int = 20) -> list[dict]:
@@ -150,9 +152,9 @@ Be concise and helpful. When the user asks you to create, move, or modify cards,
 
 
 @router.post("/chat")
-def chat(body: ChatRequest, request: Request) -> ChatResponse:
+def chat(body: ChatRequest, request: Request, board_id: int = Query(...)) -> ChatResponse:
     username = get_current_user(request)
-    board_id = _get_board_id(username)
+    _verify_board_owner(board_id, username)
 
     board_json = _get_board_json(board_id)
     history = _get_chat_history(board_id)
@@ -201,7 +203,7 @@ def chat(body: ChatRequest, request: Request) -> ChatResponse:
 
 
 @router.get("/chat/history")
-def chat_history(request: Request) -> list[dict]:
+def chat_history(request: Request, board_id: int = Query(...)) -> list[dict]:
     username = get_current_user(request)
-    board_id = _get_board_id(username)
+    _verify_board_owner(board_id, username)
     return _get_chat_history(board_id, limit=50)

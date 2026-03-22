@@ -3,19 +3,21 @@
 ## Business Requirements
 
 This project is building a Project Management App. Key features:
-- A user can sign in
-- When signed in, the user sees a Kanban board representing their project
-- The Kanban board has fixed columns that can be renamed
+- A user can sign in or create an account
+- When signed in, the user sees a project selector dropdown and can create new projects
+- Each project has a Kanban board with fixed columns that can be renamed
 - The cards on the Kanban board can be moved with drag and drop, and edited
 - There is an AI chat feature in a sidebar; the AI is able to create / edit / move one or more cards
+- Chat history is scoped per project
 
-## Limitations
+## Current State
 
-For the MVP, there will only be a user sign in (hardcoded to 'user' and 'password') but the database will support multiple users for future.
-
-For the MVP, there will only be 1 Kanban board per signed in user.
-
-For the MVP, this will run locally (in a docker container)
+The app is a working full-stack application with:
+- User registration and login (passwords are salted and hashed)
+- Multiple projects per user with a dropdown selector and inline creation form
+- Persistent Kanban boards backed by SQLite
+- AI chat sidebar powered by Claude API (Anthropic)
+- Docker-based deployment
 
 ## Technical Decisions
 
@@ -25,12 +27,8 @@ For the MVP, this will run locally (in a docker container)
 - Use "uv" as the package manager for python in the Docker container
 - Use the Claude API (Anthropic) for the AI calls. An ANTHROPIC_API_KEY is in .env in the project root
 - Use `claude-sonnet-4-20250514` as the model
-- Use SQLLite local database for the database, creating a new db if it doesn't exist
+- Use SQLite local database for the database, creating a new db if it doesn't exist
 - Start and Stop server scripts for Mac, PC, Linux in scripts/
-
-## Starting Point
-
-A working MVP of the frontend has been built and is already in frontend. This is not yet designed for the Docker setup. It's a pure frontend-only demo.
 
 ## Color Scheme
 

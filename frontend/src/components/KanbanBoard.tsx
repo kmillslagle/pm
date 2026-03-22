@@ -23,7 +23,11 @@ import {
 } from "@/lib/api";
 import { moveCard } from "@/lib/kanban";
 
-export const KanbanBoard = () => {
+type KanbanBoardProps = {
+  boardId: number;
+};
+
+export const KanbanBoard = ({ boardId }: KanbanBoardProps) => {
   const [board, setBoard] = useState<BoardData | null>(null);
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
 
@@ -34,8 +38,8 @@ export const KanbanBoard = () => {
   );
 
   useEffect(() => {
-    getBoard().then(setBoard);
-  }, []);
+    getBoard(boardId).then(setBoard);
+  }, [boardId]);
 
   const cardsById = useMemo(() => board?.cards ?? {}, [board?.cards]);
 
@@ -126,7 +130,7 @@ export const KanbanBoard = () => {
           <div className="flex flex-wrap items-start justify-between gap-6">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.35em] text-[var(--gray-text)]">
-                Single Board Kanban
+                Project Board
               </p>
               <h1 className="mt-3 font-display text-4xl font-semibold text-[var(--navy-dark)]">
                 Kanban Studio
@@ -141,7 +145,7 @@ export const KanbanBoard = () => {
                 Focus
               </p>
               <p className="mt-2 text-lg font-semibold text-[var(--primary-blue)]">
-                One board. Five columns. Zero clutter.
+                Five columns. Zero clutter.
               </p>
             </div>
           </div>
