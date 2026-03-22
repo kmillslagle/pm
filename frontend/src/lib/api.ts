@@ -46,10 +46,10 @@ export async function listBoards(): Promise<BoardInfo[]> {
   return apiFetch("/api/boards");
 }
 
-export async function createBoard(name: string): Promise<BoardInfo> {
+export async function createBoard(name: string, columns?: string[]): Promise<BoardInfo> {
   return apiFetch("/api/boards", {
     method: "POST",
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, columns }),
   });
 }
 
@@ -79,6 +79,20 @@ export async function moveCard(cardId: string, columnId: string, position: numbe
   await apiFetch(`/api/cards/${cardId}/move`, {
     method: "PUT",
     body: JSON.stringify({ column_id: columnId, position }),
+  });
+}
+
+export type GenerateResponse = {
+  board_id: number;
+  board_name: string;
+  card_count: number;
+  column_names: string[];
+};
+
+export async function generateBoard(prompt: string, boardName?: string): Promise<GenerateResponse> {
+  return apiFetch("/api/boards/generate", {
+    method: "POST",
+    body: JSON.stringify({ prompt, board_name: boardName || "" }),
   });
 }
 

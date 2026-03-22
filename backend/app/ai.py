@@ -15,6 +15,10 @@ MODEL = "claude-sonnet-4-20250514"
 class ChatRequest(BaseModel):
     message: str
 
+class GenerateRequest(BaseModel):
+    prompt: str
+    board_name: str = ""
+
 class CardAction(BaseModel):
     action: str  # "create", "update", "move", "delete"
     card_id: str | None = None
@@ -26,6 +30,12 @@ class CardAction(BaseModel):
 class ChatResponse(BaseModel):
     reply: str
     board_updates: list[CardAction] = []
+
+class GenerateResponse(BaseModel):
+    board_id: int
+    board_name: str
+    card_count: int
+    column_names: list[str]
 
 
 def _get_board_json(board_id: int) -> dict:
@@ -86,7 +96,77 @@ def _apply_board_updates(board_id: int, updates: list[CardAction]) -> None:
     import secrets
     conn = get_connection()
     for update in updates:
-        if update.action == "create" and update.column_id and update.title:
+        if update.action == "generate_board" and update.title:
+            # Full project generation: create board with columns and cards
+            details_json = update.details or "{}"
+            try:
+                gen_data = json.loads(details_json)
+            except json.JSONDecodeError:
+                gen_data = {}
+            column_names = gen_data.get("columns", ["Backlog", "To Do", "In Progress", "Review", "Done"])
+            cards_data = gen_data.get("cards", [])
+
+            user_row = conn.execute(
+                "SELECT u.id FROM users u JOIN boards b ON b.user_id = u.id WHERE b.id = ?",
+                (board_id,)
+            ).fetchone()
+            if user_row:
+                conn.execute("INSERT INTO boards (user_id, name) VALUES (?, ?)", (user_row["id"], update.title))
+                new_board_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                col_map = {}
+                for i, col_name in enumerate(column_names):
+                    col_id = f"col-{secrets.token_hex(4)}"
+                    conn.execute(
+                        "INSERT INTO board_columns (id, board_id, title, position) VALUES (?, ?, ?, ?)",
+                        (col_id, new_board_id, col_name, i)
+                    )
+                    col_map[col_name] = col_id
+
+                col_positions: dict[str, int] = {col_name: 0 for col_name in column_names}
+                for card in cards_data:
+                    if not isinstance(card, dict):
+                        continue
+                    col_name = card.get("column", "")
+                    title = card.get("title", "")
+                    details = card.get("details", "")
+                    if not title:
+                        continue
+                    col_id = col_map.get(col_name)
+                    if not col_id:
+                        for name, cid in col_map.items():
+                            if name.lower() == col_name.lower():
+                                col_id = cid
+                                col_name = name
+                                break
+                    if not col_id:
+                        first_col = column_names[0]
+                        col_id = col_map[first_col]
+                        col_name = first_col
+                    pos = col_positions.get(col_name, 0)
+                    card_id = f"card-{secrets.token_hex(4)}"
+                    conn.execute(
+                        "INSERT INTO cards (id, column_id, title, details, position) VALUES (?, ?, ?, ?, ?)",
+                        (card_id, col_id, title, details, pos)
+                    )
+                    col_positions[col_name] = pos + 1
+        elif update.action == "create_board" and update.title:
+            # Create a new board for this user
+            column_names = [c.strip() for c in (update.details or "").split(",") if c.strip()]
+            if not column_names:
+                column_names = ["Backlog", "Discovery", "In Progress", "Review", "Done"]
+            user_row = conn.execute(
+                "SELECT u.id FROM users u JOIN boards b ON b.user_id = u.id WHERE b.id = ?",
+                (board_id,)
+            ).fetchone()
+            if user_row:
+                conn.execute("INSERT INTO boards (user_id, name) VALUES (?, ?)", (user_row["id"], update.title))
+                new_board_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                for i, col_name in enumerate(column_names):
+                    conn.execute(
+                        "INSERT INTO board_columns (id, board_id, title, position) VALUES (?, ?, ?, ?)",
+                        (f"col-{secrets.token_hex(4)}", new_board_id, col_name, i)
+                    )
+        elif update.action == "create" and update.column_id and update.title:
             max_pos = conn.execute(
                 "SELECT COALESCE(MAX(position), -1) as p FROM cards WHERE column_id = ?",
                 (update.column_id,)
@@ -142,13 +222,45 @@ Available board update actions:
 - {"action": "move", "card_id": "<card-id>", "column_id": "<target-column-id>", "position": <position>}
 - {"action": "delete", "card_id": "<card-id>"}
 
+You can also create new projects/boards:
+- {"action": "create_board", "title": "<board-name>", "details": "<comma-separated column names>"}
+
+## PROJECT GENERATION SKILL
+
+When the user wants to create a NEW project with MANY cards (more than 3-4), use the generate_board action instead of individual create actions. This is critical for large requests like "generate kanban cards for...", "create a project with workstreams...", or any prompt that describes a full project.
+
+Use this action:
+{"action": "generate_board", "title": "<board-name>", "details": "<columns-and-cards-json>"}
+
+The "details" field must be a JSON string with this schema:
+{
+  "columns": ["Column 1 Name", "Column 2 Name", ...],
+  "cards": [
+    {"column": "Column 1 Name", "title": "Short action-oriented title", "details": "2-4 sentence description"},
+    ...
+  ]
+}
+
+Guidelines for generate_board:
+- Derive column names from workstreams, phases, or categories described in the prompt.
+- If no clear structure is given, use sensible phases (e.g. "Planning", "In Progress", "Review", "Done").
+- Card titles should be short and action-oriented (e.g. "Draft Dual-Block Voting Amendment").
+- Card details should be 2-4 sentences covering: scope, deliverable type, key references, and dependencies.
+- Generate ALL cards requested. Do not skip, truncate, or summarize. If the user asks for 35 cards, generate all 35.
+- Each card's "column" field must exactly match one of the column names in the "columns" array.
+- Include priority, dependencies, deliverable type, and key references in card details when the user specifies them.
+
+When using generate_board, your "reply" should be a brief summary of what was created (e.g. "I've created your project with 4 workstreams and 35 cards."). Do NOT list every card in the reply text — the board itself will show them.
+
 Always respond with valid JSON matching this schema:
 {
   "reply": "your message to the user",
   "board_updates": [... optional array of actions]
 }
 
-Be concise and helpful. When the user asks you to create, move, or modify cards, do it via board_updates."""
+Be concise and helpful. When the user asks you to create, move, or modify cards, do it via board_updates.
+When the user asks to create a new project/board, use the create_board action for simple boards or generate_board for projects with many cards.
+When listing board contents, format them nicely with the column names and card titles."""
 
 
 @router.post("/chat")
@@ -179,7 +291,7 @@ def chat(body: ChatRequest, request: Request, board_id: int = Query(...)) -> Cha
 
     response = client.messages.create(
         model=MODEL,
-        max_tokens=1024,
+        max_tokens=16384,
         system=SYSTEM_PROMPT,
         messages=messages,
     )
@@ -207,3 +319,140 @@ def chat_history(request: Request, board_id: int = Query(...)) -> list[dict]:
     username = get_current_user(request)
     _verify_board_owner(board_id, username)
     return _get_chat_history(board_id, limit=50)
+
+
+GENERATE_SYSTEM_PROMPT = """You are a project management expert. Given a project description or prompt, generate a complete Kanban board structure with columns and cards.
+
+You MUST respond with valid JSON matching this exact schema:
+{
+  "board_name": "Short project name (if not provided by the user)",
+  "columns": ["Column 1 Name", "Column 2 Name", ...],
+  "cards": [
+    {
+      "column": "Column 1 Name",
+      "title": "Short action-oriented card title",
+      "details": "2-4 sentence description of scope, deliverables, and any dependencies or key references."
+    },
+    ...
+  ]
+}
+
+Guidelines:
+- Derive column names from workstreams, phases, or categories described in the prompt. If the prompt specifies workstreams or categories, use those as columns.
+- If no clear structure is given, use sensible project phases (e.g. "Planning", "In Progress", "Review", "Done").
+- Card titles should be short and action-oriented (e.g. "Draft Dual-Block Voting Amendment", "Analyze IRC §67(e) Compliance").
+- Card details should be 2-4 sentences covering: scope, deliverable type, key references (statutes, document sections, etc.), and dependencies on other cards if any.
+- Generate ALL cards requested. Do not skip or summarize. If the prompt asks for 30 cards, generate all 30.
+- Each card's "column" field must exactly match one of the column names in the "columns" array.
+- Respond ONLY with the JSON object. No markdown, no commentary, no code fences."""
+
+
+@router.post("/boards/generate")
+def generate_board(body: GenerateRequest, request: Request) -> GenerateResponse:
+    import secrets
+
+    username = get_current_user(request)
+
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=500, detail="AI is not configured. Set ANTHROPIC_API_KEY.")
+
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=16384,
+        system=GENERATE_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": body.prompt}],
+    )
+
+    raw = response.content[0].text if response.content else "{}"
+    # Strip markdown code fences if present
+    stripped = raw.strip()
+    if stripped.startswith("```"):
+        lines = stripped.split("\n")
+        # Remove first line (```json or ```) and last line (```)
+        lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        stripped = "\n".join(lines)
+
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="AI returned invalid JSON. Please try again.")
+
+    board_name = body.board_name.strip() if body.board_name.strip() else parsed.get("board_name", "AI Generated Board")
+    column_names = parsed.get("columns", [])
+    cards_data = parsed.get("cards", [])
+
+    if not column_names:
+        raise HTTPException(status_code=500, detail="AI did not generate any columns. Please try again.")
+
+    # Create the board
+    conn = get_connection()
+    user_row = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
+    if not user_row:
+        conn.close()
+        raise HTTPException(status_code=401, detail="User not found")
+
+    conn.execute("INSERT INTO boards (user_id, name) VALUES (?, ?)", (user_row["id"], board_name))
+    board_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    # Create columns and build a name->id mapping
+    col_map = {}
+    for i, col_name in enumerate(column_names):
+        col_id = f"col-{secrets.token_hex(4)}"
+        conn.execute(
+            "INSERT INTO board_columns (id, board_id, title, position) VALUES (?, ?, ?, ?)",
+            (col_id, board_id, col_name, i),
+        )
+        col_map[col_name] = col_id
+
+    # Create cards
+    card_count = 0
+    # Track position per column
+    col_positions: dict[str, int] = {col_name: 0 for col_name in column_names}
+
+    for card in cards_data:
+        if not isinstance(card, dict):
+            continue
+        col_name = card.get("column", "")
+        title = card.get("title", "")
+        details = card.get("details", "")
+        if not title:
+            continue
+
+        # Find matching column (exact match first, then case-insensitive)
+        col_id = col_map.get(col_name)
+        if not col_id:
+            for name, cid in col_map.items():
+                if name.lower() == col_name.lower():
+                    col_id = cid
+                    col_name = name
+                    break
+        if not col_id:
+            # Put in first column as fallback
+            first_col = column_names[0]
+            col_id = col_map[first_col]
+            col_name = first_col
+
+        pos = col_positions.get(col_name, 0)
+        card_id = f"card-{secrets.token_hex(4)}"
+        conn.execute(
+            "INSERT INTO cards (id, column_id, title, details, position) VALUES (?, ?, ?, ?, ?)",
+            (card_id, col_id, title, details, pos),
+        )
+        col_positions[col_name] = pos + 1
+        card_count += 1
+
+    conn.commit()
+    conn.close()
+
+    return GenerateResponse(
+        board_id=board_id,
+        board_name=board_name,
+        card_count=card_count,
+        column_names=column_names,
+    )
