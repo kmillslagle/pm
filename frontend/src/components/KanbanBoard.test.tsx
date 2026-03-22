@@ -4,6 +4,26 @@ import { vi } from "vitest";
 import { KanbanBoard } from "@/components/KanbanBoard";
 import type { BoardData } from "@/lib/kanban";
 
+vi.mock("@/lib/api", () => ({
+  createCard: vi.fn().mockResolvedValue({
+    id: "card-new",
+    title: "New card",
+    details: "Notes",
+  }),
+  deleteCard: vi.fn().mockResolvedValue(undefined),
+  moveCard: vi.fn().mockResolvedValue(undefined),
+  renameColumn: vi.fn().mockResolvedValue(undefined),
+  updateCard: vi.fn().mockResolvedValue({
+    id: "card-1",
+    title: "Updated",
+    details: "Updated details",
+  }),
+  getBoard: vi.fn().mockResolvedValue({ columns: [], cards: {} }),
+}));
+
+// Must import after mock
+import * as api from "@/lib/api";
+
 const mockBoard: BoardData = {
   columns: [
     { id: "col-backlog", title: "Backlog", cardIds: ["card-1", "card-2"] },
@@ -31,7 +51,7 @@ const renderBoard = (boardOverride?: Partial<BoardData>) => {
   const onBoardChange = vi.fn();
   render(
     <KanbanBoard
-      projectId="test-project"
+      boardId={1}
       projectName="Test Project"
       board={board}
       onBoardChange={onBoardChange}
@@ -41,6 +61,10 @@ const renderBoard = (boardOverride?: Partial<BoardData>) => {
 };
 
 describe("KanbanBoard", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("renders five columns", () => {
     renderBoard();
     expect(screen.getAllByTestId(/column-/i)).toHaveLength(5);
@@ -51,19 +75,16 @@ describe("KanbanBoard", () => {
     expect(screen.getByText("Test Project")).toBeInTheDocument();
   });
 
-  it("calls onBoardChange when a column is renamed", async () => {
-    const { onBoardChange } = renderBoard();
+  it("calls api.renameColumn when a column is renamed", async () => {
+    renderBoard();
     const column = getFirstColumn();
     const input = within(column).getByLabelText("Column title");
     await userEvent.type(input, "X");
-    expect(onBoardChange).toHaveBeenCalled();
-    const lastCall = onBoardChange.mock.calls[onBoardChange.mock.calls.length - 1][0];
-    const renamedCol = lastCall.columns.find((c: { id: string }) => c.id === "col-backlog");
-    expect(renamedCol.title).toBe("BacklogX");
+    expect(api.renameColumn).toHaveBeenCalledWith("col-backlog", "BacklogX");
   });
 
-  it("adds and removes a card", async () => {
-    const { onBoardChange } = renderBoard();
+  it("calls api.createCard when adding a card", async () => {
+    renderBoard();
     const column = getFirstColumn();
     const addButton = within(column).getByRole("button", {
       name: /add a card/i,
@@ -77,13 +98,18 @@ describe("KanbanBoard", () => {
 
     await userEvent.click(within(column).getByRole("button", { name: /add card/i }));
 
-    expect(onBoardChange).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(api.createCard).toHaveBeenCalledWith("col-backlog", "New card", "Notes");
+    });
+  });
 
-    // Verify the last call to onBoardChange included the new card
-    const lastCall = onBoardChange.mock.calls[onBoardChange.mock.calls.length - 1][0];
-    const newCardIds = Object.keys(lastCall.cards);
-    const addedCard = newCardIds.find((id: string) => !mockBoard.cards[id]);
-    expect(addedCard).toBeDefined();
-    expect(lastCall.cards[addedCard!].title).toBe("New card");
+  it("calls api.deleteCard when deleting a card", async () => {
+    renderBoard();
+    const deleteButtons = screen.getAllByRole("button", { name: /delete/i });
+    await userEvent.click(deleteButtons[0]);
+
+    await waitFor(() => {
+      expect(api.deleteCard).toHaveBeenCalledWith("card-1");
+    });
   });
 });

@@ -1,7 +1,17 @@
+export type Subtask = {
+  id: string;
+  title: string;
+  done: boolean;
+};
+
 export type Card = {
   id: string;
   title: string;
   details: string;
+  priority?: "high" | "medium" | "low" | "none";
+  notes?: string;
+  dueDate?: string;
+  subtasks?: Subtask[];
 };
 
 export type Column = {

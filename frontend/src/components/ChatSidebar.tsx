@@ -1,18 +1,19 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { processChat, type ChatAction } from "@/lib/chatEngine";
-import type { ChatMessage } from "@/lib/storage";
+import * as api from "@/lib/api";
 import type { BoardData } from "@/lib/kanban";
 
 type ChatSidebarProps = {
   isOpen: boolean;
   onClose: () => void;
-  board: BoardData;
-  messages: ChatMessage[];
-  onAction: (actions: ChatAction[]) => void;
-  onMessagesChange: (messages: ChatMessage[]) => void;
+  boardId: number;
+  board: BoardData | null;
+  onBoardRefresh: () => void;
+  onBoardCreated: (boardId: number) => void;
 };
+
+type ChatMessage = { role: "user" | "assistant"; content: string };
 
 function renderInline(text: string, lineKey: number): React.ReactNode[] {
   const nodes: React.ReactNode[] = [];
@@ -69,41 +70,71 @@ function renderMessage(content: string) {
 export const ChatSidebar = ({
   isOpen,
   onClose,
+  boardId,
   board,
-  messages,
-  onAction,
-  onMessagesChange,
+  onBoardRefresh,
+  onBoardCreated,
 }: ChatSidebarProps) => {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const loadedBoardRef = useRef<number | null>(null);
+
+  // Load chat history when sidebar opens
+  useEffect(() => {
+    if (isOpen && loadedBoardRef.current !== boardId) {
+      loadedBoardRef.current = boardId;
+      api
+        .getChatHistory(boardId)
+        .then((history) => setMessages(history))
+        .catch(() => setMessages([]));
+    }
+  }, [isOpen, boardId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const sendMessage = (text: string) => {
+  const sendMessage = async (text: string) => {
     if (!text.trim() || loading) return;
 
     const userMsg: ChatMessage = { role: "user", content: text.trim() };
     const withUser = [...messages, userMsg];
-    onMessagesChange(withUser);
+    setMessages(withUser);
     setInput("");
     setLoading(true);
 
-    setTimeout(() => {
-      const result = processChat(text.trim(), board);
+    try {
+      const response = await api.sendChatMessage(boardId, text.trim());
+
       const assistantMsg: ChatMessage = {
         role: "assistant",
-        content: result.reply,
+        content: response.reply,
       };
-      const updated = [...withUser, assistantMsg];
-      onMessagesChange(updated);
-      if (result.actions.length > 0) {
-        onAction(result.actions);
+      setMessages([...withUser, assistantMsg]);
+
+      if (response.board_updates && response.board_updates.length > 0) {
+        onBoardRefresh();
       }
+
+      if (response.create_board) {
+        try {
+          const newBoard = await api.createBoardFromAI(response.create_board);
+          onBoardCreated(newBoard.id);
+        } catch {
+          // Board creation failed — the assistant message is already shown
+        }
+      }
+    } catch {
+      const errorMsg: ChatMessage = {
+        role: "assistant",
+        content: "Sorry, something went wrong. Please try again.",
+      };
+      setMessages([...withUser, errorMsg]);
+    } finally {
       setLoading(false);
-    }, 300);
+    }
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -165,6 +196,18 @@ export const ChatSidebar = ({
               className="rounded-full border border-[var(--stroke)] px-3 py-1.5 text-xs font-semibold text-[var(--gray-text)] transition hover:border-[var(--primary-blue)] hover:text-[var(--primary-blue)] disabled:opacity-50"
             >
               Help
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                sendMessage(
+                  "I want to build a new board from scratch. Help me set it up."
+                )
+              }
+              disabled={loading}
+              className="rounded-full border border-[var(--stroke)] px-3 py-1.5 text-xs font-semibold text-[var(--secondary-purple)] transition hover:border-[var(--secondary-purple)] disabled:opacity-50"
+            >
+              Build a Board
             </button>
           </div>
 

@@ -1,10 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import type { ProjectConfig } from "@/lib/storage";
+import * as api from "@/lib/api";
 
 type Props = {
-  onComplete: (config: ProjectConfig) => void;
+  onComplete: (info: { id: number; name: string }) => void;
   onCancel?: () => void;
 };
 
@@ -37,6 +37,7 @@ export const ProjectWizard = ({ onComplete, onCancel }: Props) => {
   const [description, setDescription] = useState("");
   const [template, setTemplate] = useState<Template | null>(null);
   const [customColumns, setCustomColumns] = useState<string[]>(["", "", ""]);
+  const [creating, setCreating] = useState(false);
 
   const totalSteps = template === "custom" ? 3 : 2;
 
@@ -88,18 +89,16 @@ export const ProjectWizard = ({ onComplete, onCancel }: Props) => {
 
   /* ---- create ---- */
 
-  const handleCreate = () => {
-    const config: ProjectConfig = {
-      id: crypto.randomUUID(),
-      name: name.trim(),
-      description: description.trim(),
-      columns: resolvedColumns.map((title, i) => ({
-        id: `col-${i}`,
-        title: title.trim(),
-      })),
-      createdAt: new Date().toISOString(),
-    };
-    onComplete(config);
+  const handleCreate = async () => {
+    if (creating) return;
+    setCreating(true);
+    try {
+      const columnNames = resolvedColumns.map((c) => c.trim());
+      const board = await api.createBoard(name.trim(), columnNames);
+      onComplete({ id: board.id, name: board.name });
+    } catch {
+      setCreating(false);
+    }
   };
 
   /* ---- validation ---- */
@@ -622,10 +621,11 @@ export const ProjectWizard = ({ onComplete, onCancel }: Props) => {
               <button
                 type="button"
                 onClick={handleCreate}
-                className="rounded-full px-6 py-2.5 text-xs font-semibold uppercase tracking-wide text-white transition hover:brightness-110"
+                disabled={creating}
+                className="rounded-full px-6 py-2.5 text-xs font-semibold uppercase tracking-wide text-white transition hover:brightness-110 disabled:opacity-50"
                 style={{ backgroundColor: "var(--secondary-purple)" }}
               >
-                Create Project
+                {creating ? "Creating..." : "Create Project"}
               </button>
             )}
           </div>

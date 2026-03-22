@@ -22,10 +22,10 @@ export async function login(username: string, password: string): Promise<{ usern
   });
 }
 
-export async function register(username: string, password: string): Promise<{ username: string }> {
+export async function register(username: string, password: string, email?: string): Promise<{ username: string }> {
   return apiFetch("/api/auth/register", {
     method: "POST",
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ username, password, ...(email ? { email } : {}) }),
   });
 }
 
@@ -37,7 +37,18 @@ export async function getMe(): Promise<{ username: string }> {
   return apiFetch("/api/auth/me");
 }
 
-export type Card = { id: string; title: string; details: string };
+export type Subtask = { id: string; title: string; done: boolean };
+
+export type Card = {
+  id: string;
+  title: string;
+  details: string;
+  priority?: "high" | "medium" | "low" | "none";
+  notes?: string;
+  dueDate?: string;
+  subtasks?: Subtask[];
+};
+
 export type Column = { id: string; title: string; cardIds: string[] };
 export type BoardData = { columns: Column[]; cards: Record<string, Card> };
 export type BoardInfo = { id: number; name: string };
@@ -46,10 +57,10 @@ export async function listBoards(): Promise<BoardInfo[]> {
   return apiFetch("/api/boards");
 }
 
-export async function createBoard(name: string): Promise<BoardInfo> {
+export async function createBoard(name: string, columns?: string[]): Promise<BoardInfo> {
   return apiFetch("/api/boards", {
     method: "POST",
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, ...(columns ? { columns } : {}) }),
   });
 }
 
@@ -82,7 +93,25 @@ export async function moveCard(cardId: string, columnId: string, position: numbe
   });
 }
 
+export async function updateCard(
+  cardId: string,
+  fields: {
+    title?: string;
+    details?: string;
+    priority?: string;
+    notes?: string;
+    due_date?: string;
+    subtasks?: Subtask[];
+  }
+): Promise<Card> {
+  return apiFetch(`/api/cards/${cardId}`, {
+    method: "PUT",
+    body: JSON.stringify(fields),
+  });
+}
+
 export type ChatMessage = { role: "user" | "assistant"; content: string };
+
 export type BoardUpdate = {
   action: string;
   card_id?: string;
@@ -90,8 +119,20 @@ export type BoardUpdate = {
   title?: string;
   details?: string;
   position?: number;
+  priority?: string;
+  notes?: string;
 };
-export type ChatResponse = { reply: string; board_updates: BoardUpdate[] };
+
+export type CreateBoardPayload = {
+  name: string;
+  columns: { name: string; cards: { title: string; details: string }[] }[];
+};
+
+export type ChatResponse = {
+  reply: string;
+  board_updates: BoardUpdate[];
+  create_board?: CreateBoardPayload;
+};
 
 export async function sendChatMessage(boardId: number, message: string): Promise<ChatResponse> {
   return apiFetch(`/api/chat?board_id=${boardId}`, {
@@ -102,4 +143,11 @@ export async function sendChatMessage(boardId: number, message: string): Promise
 
 export async function getChatHistory(boardId: number): Promise<ChatMessage[]> {
   return apiFetch(`/api/chat/history?board_id=${boardId}`);
+}
+
+export async function createBoardFromAI(payload: CreateBoardPayload): Promise<BoardInfo> {
+  return apiFetch("/api/boards/from-ai", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -13,22 +13,27 @@ import {
 } from "@dnd-kit/core";
 import { KanbanColumn } from "@/components/KanbanColumn";
 import { KanbanCardPreview } from "@/components/KanbanCardPreview";
-import { moveCard, createId, type BoardData } from "@/lib/kanban";
+import { CardDetailModal } from "@/components/CardDetailModal";
+import { moveCard, type BoardData, type Card } from "@/lib/kanban";
+import * as api from "@/lib/api";
 
 type KanbanBoardProps = {
-  projectId: string;
+  boardId: number;
   projectName: string;
   board: BoardData;
   onBoardChange: (board: BoardData) => void;
+  onBoardCreated?: (boardId: number) => void;
 };
 
 export const KanbanBoard = ({
-  projectId,
+  boardId,
   projectName,
   board,
   onBoardChange,
+  onBoardCreated,
 }: KanbanBoardProps) => {
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
+  const [selectedCard, setSelectedCard] = useState<Card | null>(null);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -42,7 +47,7 @@ export const KanbanBoard = ({
     setActiveCardId(event.active.id as string);
   };
 
-  const handleDragEnd = (event: DragEndEvent) => {
+  const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
     setActiveCardId(null);
 
@@ -53,9 +58,25 @@ export const KanbanBoard = ({
     const newColumns = moveCard(board.columns, active.id as string, over.id as string);
     const newBoard = { ...board, columns: newColumns };
     onBoardChange(newBoard);
+
+    // Find the target column and position for the moved card
+    const cardId = active.id as string;
+    for (const col of newColumns) {
+      const idx = col.cardIds.indexOf(cardId);
+      if (idx !== -1) {
+        try {
+          await api.moveCard(cardId, col.id, idx);
+        } catch {
+          // Revert on failure by reloading
+          const refreshed = await api.getBoard(boardId);
+          onBoardChange(refreshed);
+        }
+        break;
+      }
+    }
   };
 
-  const handleRenameColumn = (columnId: string, title: string) => {
+  const handleRenameColumn = async (columnId: string, title: string) => {
     const newBoard = {
       ...board,
       columns: board.columns.map((column) =>
@@ -63,24 +84,35 @@ export const KanbanBoard = ({
       ),
     };
     onBoardChange(newBoard);
+    try {
+      await api.renameColumn(columnId, title);
+    } catch {
+      const refreshed = await api.getBoard(boardId);
+      onBoardChange(refreshed);
+    }
   };
 
   const handleAddCard = async (columnId: string, title: string, details: string) => {
-    const cardId = createId("card");
-    const card = { id: cardId, title, details };
-    const newBoard = {
-      ...board,
-      cards: { ...board.cards, [cardId]: card },
-      columns: board.columns.map((column) =>
-        column.id === columnId
-          ? { ...column, cardIds: [...column.cardIds, cardId] }
-          : column
-      ),
-    };
-    onBoardChange(newBoard);
+    try {
+      const card = await api.createCard(columnId, title, details);
+      const newBoard = {
+        ...board,
+        cards: { ...board.cards, [card.id]: card },
+        columns: board.columns.map((column) =>
+          column.id === columnId
+            ? { ...column, cardIds: [...column.cardIds, card.id] }
+            : column
+        ),
+      };
+      onBoardChange(newBoard);
+    } catch {
+      // Reload on failure
+      const refreshed = await api.getBoard(boardId);
+      onBoardChange(refreshed);
+    }
   };
 
-  const handleDeleteCard = (columnId: string, cardId: string) => {
+  const handleDeleteCard = async (columnId: string, cardId: string) => {
     const remainingCards = Object.fromEntries(
       Object.entries(board.cards).filter(([id]) => id !== cardId)
     );
@@ -94,6 +126,60 @@ export const KanbanBoard = ({
       ),
     };
     onBoardChange(newBoard);
+    try {
+      await api.deleteCard(cardId);
+    } catch {
+      const refreshed = await api.getBoard(boardId);
+      onBoardChange(refreshed);
+    }
+
+    // Close modal if the deleted card was open
+    if (selectedCard?.id === cardId) {
+      setSelectedCard(null);
+    }
+  };
+
+  const handleCardClick = useCallback(
+    (cardId: string) => {
+      const card = cardsById[cardId];
+      if (card) {
+        setSelectedCard(card);
+      }
+    },
+    [cardsById]
+  );
+
+  const handleUpdateCard = async (
+    cardId: string,
+    fields: {
+      title?: string;
+      details?: string;
+      priority?: string;
+      notes?: string;
+      due_date?: string;
+      subtasks?: api.Subtask[];
+    }
+  ) => {
+    try {
+      const updated = await api.updateCard(cardId, fields);
+      const newBoard = {
+        ...board,
+        cards: { ...board.cards, [cardId]: updated },
+      };
+      onBoardChange(newBoard);
+      setSelectedCard(updated);
+    } catch {
+      // Silently fail — card stays as-is
+    }
+  };
+
+  const handleDeleteFromModal = async (cardId: string) => {
+    // Find the column that contains this card
+    const col = board.columns.find((c) => c.cardIds.includes(cardId));
+    if (col) {
+      await handleDeleteCard(col.id, cardId);
+    }
+    setSelectedCard(null);
   };
 
   const activeCard = activeCardId ? cardsById[activeCardId] : null;
@@ -159,6 +245,7 @@ export const KanbanBoard = ({
                 onRename={handleRenameColumn}
                 onAddCard={handleAddCard}
                 onDeleteCard={handleDeleteCard}
+                onCardClick={handleCardClick}
               />
             ))}
           </section>
@@ -171,6 +258,16 @@ export const KanbanBoard = ({
           </DragOverlay>
         </DndContext>
       </main>
+
+      {selectedCard && (
+        <CardDetailModal
+          card={selectedCard}
+          columns={board.columns}
+          onSave={handleUpdateCard}
+          onDelete={handleDeleteFromModal}
+          onClose={() => setSelectedCard(null)}
+        />
+      )}
     </div>
   );
 };
