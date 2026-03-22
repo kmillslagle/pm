@@ -40,6 +40,7 @@ class BoardInfo(BaseModel):
 
 class BoardCreate(BaseModel):
     name: str
+    columns: list[str] | None = None
 
 
 def _verify_board_owner(board_id: int, username: str) -> None:
@@ -80,14 +81,12 @@ def create_board(body: BoardCreate, request: Request) -> BoardInfo:
         (user_row["id"], body.name.strip()),
     )
     board_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    column_names = body.columns if body.columns else ["Backlog", "Discovery", "In Progress", "Review", "Done"]
     conn.executemany(
         "INSERT INTO board_columns (id, board_id, title, position) VALUES (?, ?, ?, ?)",
         [
-            (f"col-{secrets.token_hex(4)}", board_id, "Backlog", 0),
-            (f"col-{secrets.token_hex(4)}", board_id, "Discovery", 1),
-            (f"col-{secrets.token_hex(4)}", board_id, "In Progress", 2),
-            (f"col-{secrets.token_hex(4)}", board_id, "Review", 3),
-            (f"col-{secrets.token_hex(4)}", board_id, "Done", 4),
+            (f"col-{secrets.token_hex(4)}", board_id, name, i)
+            for i, name in enumerate(column_names)
         ],
     )
     conn.commit()

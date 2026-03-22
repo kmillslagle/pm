@@ -86,7 +86,24 @@ def _apply_board_updates(board_id: int, updates: list[CardAction]) -> None:
     import secrets
     conn = get_connection()
     for update in updates:
-        if update.action == "create" and update.column_id and update.title:
+        if update.action == "create_board" and update.title:
+            # Create a new board for this user
+            column_names = [c.strip() for c in (update.details or "").split(",") if c.strip()]
+            if not column_names:
+                column_names = ["Backlog", "Discovery", "In Progress", "Review", "Done"]
+            user_row = conn.execute(
+                "SELECT u.id FROM users u JOIN boards b ON b.user_id = u.id WHERE b.id = ?",
+                (board_id,)
+            ).fetchone()
+            if user_row:
+                conn.execute("INSERT INTO boards (user_id, name) VALUES (?, ?)", (user_row["id"], update.title))
+                new_board_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                for i, col_name in enumerate(column_names):
+                    conn.execute(
+                        "INSERT INTO board_columns (id, board_id, title, position) VALUES (?, ?, ?, ?)",
+                        (f"col-{secrets.token_hex(4)}", new_board_id, col_name, i)
+                    )
+        elif update.action == "create" and update.column_id and update.title:
             max_pos = conn.execute(
                 "SELECT COALESCE(MAX(position), -1) as p FROM cards WHERE column_id = ?",
                 (update.column_id,)
@@ -142,13 +159,18 @@ Available board update actions:
 - {"action": "move", "card_id": "<card-id>", "column_id": "<target-column-id>", "position": <position>}
 - {"action": "delete", "card_id": "<card-id>"}
 
+You can also create new projects/boards:
+- {"action": "create_board", "title": "<board-name>", "details": "<comma-separated column names>"}
+
 Always respond with valid JSON matching this schema:
 {
   "reply": "your message to the user",
   "board_updates": [... optional array of actions]
 }
 
-Be concise and helpful. When the user asks you to create, move, or modify cards, do it via board_updates."""
+Be concise and helpful. When the user asks you to create, move, or modify cards, do it via board_updates.
+When the user asks to create a new project/board, use the create_board action.
+When listing board contents, format them nicely with the column names and card titles."""
 
 
 @router.post("/chat")

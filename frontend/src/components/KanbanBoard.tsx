@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -13,21 +13,23 @@ import {
 } from "@dnd-kit/core";
 import { KanbanColumn } from "@/components/KanbanColumn";
 import { KanbanCardPreview } from "@/components/KanbanCardPreview";
-import { moveCard, createId, type BoardData } from "@/lib/kanban";
+import {
+  getBoard,
+  renameColumn as apiRenameColumn,
+  createCard as apiCreateCard,
+  deleteCard as apiDeleteCard,
+  moveCard as apiMoveCard,
+  type BoardData,
+} from "@/lib/api";
+import { moveCard } from "@/lib/kanban";
 
 type KanbanBoardProps = {
-  projectId: string;
-  projectName: string;
-  board: BoardData;
-  onBoardChange: (board: BoardData) => void;
+  boardId: number;
+  projectName?: string;
 };
 
-export const KanbanBoard = ({
-  projectId,
-  projectName,
-  board,
-  onBoardChange,
-}: KanbanBoardProps) => {
+export const KanbanBoard = ({ boardId, projectName }: KanbanBoardProps) => {
+  const [board, setBoard] = useState<BoardData | null>(null);
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
 
   const sensors = useSensors(
@@ -36,7 +38,11 @@ export const KanbanBoard = ({
     })
   );
 
-  const cardsById = useMemo(() => board.cards ?? {}, [board.cards]);
+  useEffect(() => {
+    getBoard(boardId).then(setBoard);
+  }, [boardId]);
+
+  const cardsById = useMemo(() => board?.cards ?? {}, [board?.cards]);
 
   const handleDragStart = (event: DragStartEvent) => {
     setActiveCardId(event.active.id as string);
@@ -46,58 +52,74 @@ export const KanbanBoard = ({
     const { active, over } = event;
     setActiveCardId(null);
 
-    if (!over || active.id === over.id) {
+    if (!over || active.id === over.id || !board) {
       return;
     }
 
     const newColumns = moveCard(board.columns, active.id as string, over.id as string);
-    const newBoard = { ...board, columns: newColumns };
-    onBoardChange(newBoard);
+    setBoard((prev) => prev ? { ...prev, columns: newColumns } : prev);
+
+    // Find the new column and position for the moved card
+    for (const col of newColumns) {
+      const idx = col.cardIds.indexOf(active.id as string);
+      if (idx !== -1) {
+        apiMoveCard(active.id as string, col.id, idx);
+        break;
+      }
+    }
   };
 
   const handleRenameColumn = (columnId: string, title: string) => {
-    const newBoard = {
-      ...board,
-      columns: board.columns.map((column) =>
+    setBoard((prev) => prev ? {
+      ...prev,
+      columns: prev.columns.map((column) =>
         column.id === columnId ? { ...column, title } : column
       ),
-    };
-    onBoardChange(newBoard);
+    } : prev);
+    apiRenameColumn(columnId, title);
   };
 
   const handleAddCard = async (columnId: string, title: string, details: string) => {
-    const cardId = createId("card");
-    const card = { id: cardId, title, details };
-    const newBoard = {
-      ...board,
-      cards: { ...board.cards, [cardId]: card },
-      columns: board.columns.map((column) =>
+    const card = await apiCreateCard(columnId, title, details);
+    setBoard((prev) => prev ? {
+      ...prev,
+      cards: { ...prev.cards, [card.id]: card },
+      columns: prev.columns.map((column) =>
         column.id === columnId
-          ? { ...column, cardIds: [...column.cardIds, cardId] }
+          ? { ...column, cardIds: [...column.cardIds, card.id] }
           : column
       ),
-    };
-    onBoardChange(newBoard);
+    } : prev);
   };
 
   const handleDeleteCard = (columnId: string, cardId: string) => {
-    const remainingCards = Object.fromEntries(
-      Object.entries(board.cards).filter(([id]) => id !== cardId)
-    );
-    const newBoard = {
-      ...board,
-      cards: remainingCards,
-      columns: board.columns.map((column) =>
-        column.id === columnId
-          ? { ...column, cardIds: column.cardIds.filter((id) => id !== cardId) }
-          : column
-      ),
-    };
-    onBoardChange(newBoard);
+    setBoard((prev) => {
+      if (!prev) return prev;
+      const remainingCards = Object.fromEntries(
+        Object.entries(prev.cards).filter(([id]) => id !== cardId)
+      );
+      return {
+        ...prev,
+        cards: remainingCards,
+        columns: prev.columns.map((column) =>
+          column.id === columnId
+            ? { ...column, cardIds: column.cardIds.filter((id) => id !== cardId) }
+            : column
+        ),
+      };
+    });
+    apiDeleteCard(cardId);
   };
 
   const activeCard = activeCardId ? cardsById[activeCardId] : null;
-  const columnCount = board.columns.length;
+
+  if (!board) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <p className="text-sm text-[var(--gray-text)]">Loading board...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="relative overflow-hidden">
@@ -109,10 +131,10 @@ export const KanbanBoard = ({
           <div className="flex flex-wrap items-start justify-between gap-6">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.35em] text-[var(--gray-text)]">
-                Single Board Kanban
+                Project Board
               </p>
               <h1 className="mt-3 font-display text-4xl font-semibold text-[var(--navy-dark)]">
-                {projectName}
+                {projectName || "Kanban Studio"}
               </h1>
               <p className="mt-3 max-w-xl text-sm leading-6 text-[var(--gray-text)]">
                 Keep momentum visible. Rename columns, drag cards between stages,
@@ -124,7 +146,7 @@ export const KanbanBoard = ({
                 Focus
               </p>
               <p className="mt-2 text-lg font-semibold text-[var(--primary-blue)]">
-                One board. {columnCount} column{columnCount !== 1 ? "s" : ""}. Zero clutter.
+                {board.columns.length} column{board.columns.length !== 1 ? "s" : ""}. Zero clutter.
               </p>
             </div>
           </div>
@@ -147,10 +169,7 @@ export const KanbanBoard = ({
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
         >
-          <section
-            className="grid gap-6"
-            style={{ gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))" }}
-          >
+          <section className="grid gap-6" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))" }}>
             {board.columns.map((column) => (
               <KanbanColumn
                 key={column.id}

@@ -46,10 +46,10 @@ export async function listBoards(): Promise<BoardInfo[]> {
   return apiFetch("/api/boards");
 }
 
-export async function createBoard(name: string): Promise<BoardInfo> {
+export async function createBoard(name: string, columns?: string[]): Promise<BoardInfo> {
   return apiFetch("/api/boards", {
     method: "POST",
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, columns }),
   });
 }
 
