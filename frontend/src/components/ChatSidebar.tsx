@@ -117,7 +117,7 @@ export const ChatSidebar = ({
 
         if (onCreateProject) {
           const createAction = response.board_updates.find(
-            (u) => u.action === "create_board"
+            (u) => u.action === "create_board" || u.action === "generate_board"
           );
           if (createAction) {
             onCreateProject(

@@ -96,7 +96,60 @@ def _apply_board_updates(board_id: int, updates: list[CardAction]) -> None:
     import secrets
     conn = get_connection()
     for update in updates:
-        if update.action == "create_board" and update.title:
+        if update.action == "generate_board" and update.title:
+            # Full project generation: create board with columns and cards
+            details_json = update.details or "{}"
+            try:
+                gen_data = json.loads(details_json)
+            except json.JSONDecodeError:
+                gen_data = {}
+            column_names = gen_data.get("columns", ["Backlog", "To Do", "In Progress", "Review", "Done"])
+            cards_data = gen_data.get("cards", [])
+
+            user_row = conn.execute(
+                "SELECT u.id FROM users u JOIN boards b ON b.user_id = u.id WHERE b.id = ?",
+                (board_id,)
+            ).fetchone()
+            if user_row:
+                conn.execute("INSERT INTO boards (user_id, name) VALUES (?, ?)", (user_row["id"], update.title))
+                new_board_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                col_map = {}
+                for i, col_name in enumerate(column_names):
+                    col_id = f"col-{secrets.token_hex(4)}"
+                    conn.execute(
+                        "INSERT INTO board_columns (id, board_id, title, position) VALUES (?, ?, ?, ?)",
+                        (col_id, new_board_id, col_name, i)
+                    )
+                    col_map[col_name] = col_id
+
+                col_positions: dict[str, int] = {col_name: 0 for col_name in column_names}
+                for card in cards_data:
+                    if not isinstance(card, dict):
+                        continue
+                    col_name = card.get("column", "")
+                    title = card.get("title", "")
+                    details = card.get("details", "")
+                    if not title:
+                        continue
+                    col_id = col_map.get(col_name)
+                    if not col_id:
+                        for name, cid in col_map.items():
+                            if name.lower() == col_name.lower():
+                                col_id = cid
+                                col_name = name
+                                break
+                    if not col_id:
+                        first_col = column_names[0]
+                        col_id = col_map[first_col]
+                        col_name = first_col
+                    pos = col_positions.get(col_name, 0)
+                    card_id = f"card-{secrets.token_hex(4)}"
+                    conn.execute(
+                        "INSERT INTO cards (id, column_id, title, details, position) VALUES (?, ?, ?, ?, ?)",
+                        (card_id, col_id, title, details, pos)
+                    )
+                    col_positions[col_name] = pos + 1
+        elif update.action == "create_board" and update.title:
             # Create a new board for this user
             column_names = [c.strip() for c in (update.details or "").split(",") if c.strip()]
             if not column_names:
@@ -172,6 +225,33 @@ Available board update actions:
 You can also create new projects/boards:
 - {"action": "create_board", "title": "<board-name>", "details": "<comma-separated column names>"}
 
+## PROJECT GENERATION SKILL
+
+When the user wants to create a NEW project with MANY cards (more than 3-4), use the generate_board action instead of individual create actions. This is critical for large requests like "generate kanban cards for...", "create a project with workstreams...", or any prompt that describes a full project.
+
+Use this action:
+{"action": "generate_board", "title": "<board-name>", "details": "<columns-and-cards-json>"}
+
+The "details" field must be a JSON string with this schema:
+{
+  "columns": ["Column 1 Name", "Column 2 Name", ...],
+  "cards": [
+    {"column": "Column 1 Name", "title": "Short action-oriented title", "details": "2-4 sentence description"},
+    ...
+  ]
+}
+
+Guidelines for generate_board:
+- Derive column names from workstreams, phases, or categories described in the prompt.
+- If no clear structure is given, use sensible phases (e.g. "Planning", "In Progress", "Review", "Done").
+- Card titles should be short and action-oriented (e.g. "Draft Dual-Block Voting Amendment").
+- Card details should be 2-4 sentences covering: scope, deliverable type, key references, and dependencies.
+- Generate ALL cards requested. Do not skip, truncate, or summarize. If the user asks for 35 cards, generate all 35.
+- Each card's "column" field must exactly match one of the column names in the "columns" array.
+- Include priority, dependencies, deliverable type, and key references in card details when the user specifies them.
+
+When using generate_board, your "reply" should be a brief summary of what was created (e.g. "I've created your project with 4 workstreams and 35 cards."). Do NOT list every card in the reply text — the board itself will show them.
+
 Always respond with valid JSON matching this schema:
 {
   "reply": "your message to the user",
@@ -179,7 +259,7 @@ Always respond with valid JSON matching this schema:
 }
 
 Be concise and helpful. When the user asks you to create, move, or modify cards, do it via board_updates.
-When the user asks to create a new project/board, use the create_board action.
+When the user asks to create a new project/board, use the create_board action for simple boards or generate_board for projects with many cards.
 When listing board contents, format them nicely with the column names and card titles."""
 
 
@@ -211,7 +291,7 @@ def chat(body: ChatRequest, request: Request, board_id: int = Query(...)) -> Cha
 
     response = client.messages.create(
         model=MODEL,
-        max_tokens=1024,
+        max_tokens=16384,
         system=SYSTEM_PROMPT,
         messages=messages,
     )
