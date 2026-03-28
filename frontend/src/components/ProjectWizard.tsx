@@ -1,14 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as api from "@/lib/api";
 
 type Props = {
-  onComplete: (info: { id: number; name: string }) => void;
+  projectId?: number; // if set, adds workstreams to existing project
+  isNewProject?: boolean; // true when creating a brand new project (show project name step)
+  onComplete: (info: { projectId: number; projectName: string }) => void;
   onCancel?: () => void;
 };
 
 type Template = "software" | "marketing" | "simple" | "custom";
+type Mode = "choose" | "manual" | "ai";
 
 const TEMPLATES: Record<
   Exclude<Template, "custom">,
@@ -30,61 +33,305 @@ const TEMPLATES: Record<
 
 const MAX_COLUMNS = 8;
 const MIN_COLUMNS = 2;
+const MAX_WORKSTREAMS = 10;
 
-export const ProjectWizard = ({ onComplete, onCancel }: Props) => {
-  const [step, setStep] = useState(1);
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [template, setTemplate] = useState<Template | null>(null);
-  const [customColumns, setCustomColumns] = useState<string[]>(["", "", ""]);
+type WorkstreamConfig = {
+  name: string;
+  template: Template | null;
+  customColumns: string[];
+};
+
+function resolveColumns(ws: WorkstreamConfig): string[] {
+  if (ws.template && ws.template !== "custom") {
+    return TEMPLATES[ws.template].columns;
+  }
+  return ws.customColumns;
+}
+
+/* ---- AI chat sub-component ---- */
+
+type ChatMsg = { role: "user" | "assistant"; content: string };
+
+function renderInline(text: string, key: number): React.ReactNode[] {
+  const nodes: React.ReactNode[] = [];
+  const regex = /\*\*(.+?)\*\*/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) nodes.push(text.slice(lastIndex, match.index));
+    nodes.push(<strong key={`b-${key}-${match.index}`}>{match[1]}</strong>);
+    lastIndex = regex.lastIndex;
+  }
+  if (lastIndex < text.length) nodes.push(text.slice(lastIndex));
+  return nodes;
+}
+
+function renderMessage(content: string) {
+  const parts: React.ReactNode[] = [];
+  content.split("\n").forEach((line, i) => {
+    if (i > 0) parts.push(<br key={`br-${i}`} />);
+    const listMatch = line.match(/^(\s*)-\s+(.*)$/);
+    if (listMatch) {
+      parts.push(
+        <span key={`li-${i}`} className="flex gap-1.5">
+          <span className="shrink-0">&bull;</span>
+          <span>{renderInline(listMatch[2], i)}</span>
+        </span>
+      );
+    } else {
+      parts.push(<span key={`line-${i}`}>{renderInline(line, i)}</span>);
+    }
+  });
+  return <>{parts}</>;
+}
+
+type AIChatProps = {
+  projectId?: number;
+  onComplete: (info: { projectId: number; projectName: string }) => void;
+  onSwitchToManual: () => void;
+};
+
+const AIBoardChat = ({ projectId, onComplete, onSwitchToManual }: AIChatProps) => {
+  const [messages, setMessages] = useState<ChatMsg[]>([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const endRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  const sendMessage = async (text: string) => {
+    if (!text.trim() || loading || creating) return;
+
+    const userMsg: ChatMsg = { role: "user", content: text.trim() };
+    const next = [...messages, userMsg];
+    setMessages(next);
+    setInput("");
+    setLoading(true);
+
+    try {
+      const history = messages.map((m) => ({ role: m.role, content: m.content }));
+      const response = await api.aiBuildBoard(text.trim(), history);
+
+      const assistantMsg: ChatMsg = { role: "assistant", content: response.reply };
+      const withReply = [...next, assistantMsg];
+      setMessages(withReply);
+
+      if (response.create_board) {
+        setCreating(true);
+        try {
+          const board = await api.createBoardFromAI(response.create_board, projectId);
+          onComplete({ projectId: projectId ?? board.id, projectName: board.name });
+        } catch {
+          setMessages([
+            ...withReply,
+            { role: "assistant", content: "Sorry, I couldn't create the board. Please try again." },
+          ]);
+          setCreating(false);
+        }
+      }
+    } catch {
+      setMessages([
+        ...next,
+        { role: "assistant", content: "Something went wrong. Please try again." },
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col" style={{ height: "400px" }}>
+      <div className="flex-1 overflow-y-auto space-y-3 pr-1">
+        {messages.length === 0 && (
+          <p className="text-sm text-center pt-4" style={{ color: "var(--gray-text)" }}>
+            Describe your project and the AI will design a Kanban board for you.
+          </p>
+        )}
+        {messages.map((msg, i) => (
+          <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+            <div
+              className="max-w-[90%] rounded-2xl px-4 py-3 text-sm leading-relaxed"
+              style={{
+                backgroundColor:
+                  msg.role === "user" ? "var(--secondary-purple)" : "var(--surface)",
+                color: msg.role === "user" ? "#ffffff" : "var(--navy-dark)",
+                border: msg.role === "assistant" ? "1px solid var(--stroke)" : "none",
+              }}
+            >
+              {msg.role === "assistant" ? renderMessage(msg.content) : msg.content}
+            </div>
+          </div>
+        ))}
+        {(loading || creating) && (
+          <div className="flex justify-start">
+            <div
+              className="rounded-2xl px-4 py-3 text-sm"
+              style={{
+                backgroundColor: "var(--surface)",
+                border: "1px solid var(--stroke)",
+                color: "var(--gray-text)",
+              }}
+            >
+              {creating ? "Building your board..." : "Thinking..."}
+            </div>
+          </div>
+        )}
+        <div ref={endRef} />
+      </div>
+
+      <div className="mt-3 flex gap-2">
+        <input
+          type="text"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && sendMessage(input)}
+          placeholder="Describe your project..."
+          disabled={loading || creating}
+          className="flex-1 rounded-xl border bg-white px-4 py-2.5 text-sm outline-none transition focus:border-[var(--primary-blue)]"
+          style={{ borderColor: "var(--stroke)", color: "var(--navy-dark)" }}
+          autoFocus
+        />
+        <button
+          type="button"
+          onClick={() => sendMessage(input)}
+          disabled={!input.trim() || loading || creating}
+          className="rounded-full px-5 py-2.5 text-xs font-semibold uppercase tracking-wide text-white transition hover:brightness-110 disabled:opacity-40"
+          style={{ backgroundColor: "var(--secondary-purple)" }}
+        >
+          Send
+        </button>
+      </div>
+
+      <button
+        type="button"
+        onClick={onSwitchToManual}
+        className="mt-3 text-center text-xs transition hover:underline"
+        style={{ color: "var(--gray-text)" }}
+      >
+        Switch to manual setup instead
+      </button>
+    </div>
+  );
+};
+
+/* ---- Template card ---- */
+
+const TemplateCard = ({
+  id, label, columns, icon, selected, onSelect,
+}: { id: Template; label: string; columns: string[]; icon: React.ReactNode; selected: boolean; onSelect: () => void }) => (
+  <button
+    type="button"
+    onClick={onSelect}
+    className="w-full rounded-2xl border p-4 text-left transition hover:border-[var(--primary-blue)]"
+    style={{
+      borderColor: selected ? "var(--primary-blue)" : "var(--stroke)",
+      backgroundColor: selected ? "rgba(32, 157, 215, 0.06)" : "var(--surface-strong)",
+    }}
+  >
+    <div className="flex items-center gap-3 mb-2">
+      <span className="text-lg">{icon}</span>
+      <span className="font-display text-sm font-semibold" style={{ color: selected ? "var(--primary-blue)" : "var(--navy-dark)" }}>
+        {label}
+      </span>
+    </div>
+    <div className="flex flex-wrap gap-1.5">
+      {columns.map((col) => (
+        <span key={col} className="rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide" style={{ backgroundColor: "var(--surface)", color: "var(--gray-text)" }}>
+          {col}
+        </span>
+      ))}
+    </div>
+  </button>
+);
+
+const TEMPLATE_ICONS: Record<Template, React.ReactNode> = {
+  software: <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="var(--secondary-purple)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="7 7 3 10 7 13" /><polyline points="13 7 17 10 13 13" /><line x1="11" y1="5" x2="9" y2="15" /></svg>,
+  marketing: <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="var(--accent-yellow)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 15 L3 8 L7 8 L7 15" /><path d="M8 15 L8 5 L12 5 L12 15" /><path d="M13 15 L13 2 L17 2 L17 15" /></svg>,
+  simple: <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="var(--primary-blue)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="5" height="14" rx="1" /><rect x="8" y="3" width="5" height="10" rx="1" /><rect x="14" y="3" width="5" height="6" rx="1" /></svg>,
+  custom: <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="var(--navy-dark)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="10" cy="10" r="7" /><line x1="10" y1="7" x2="10" y2="13" /><line x1="7" y1="10" x2="13" y2="10" /></svg>,
+};
+
+/* ---- main component ---- */
+
+export const ProjectWizard = ({ projectId, isNewProject, onComplete, onCancel }: Props) => {
+  const [mode, setMode] = useState<Mode>("choose");
+
+  // Step 1: Project name (only for new projects)
+  // Step 2: Define workstreams
+  // Step 3: Configure columns per workstream
+  // Step 4: Review & create
+  const showProjectNameStep = isNewProject && !projectId;
+  const [step, setStep] = useState(showProjectNameStep ? 1 : 2);
+
+  const [projectName, setProjectName] = useState("");
+  const [workstreams, setWorkstreams] = useState<WorkstreamConfig[]>([
+    { name: "", template: null, customColumns: ["", "", ""] },
+  ]);
+  const [activeWsIndex, setActiveWsIndex] = useState(0);
   const [creating, setCreating] = useState(false);
 
-  const totalSteps = template === "custom" ? 3 : 2;
+  const totalSteps = showProjectNameStep ? 4 : 3;
 
-  const resolvedColumns =
-    template && template !== "custom"
-      ? TEMPLATES[template].columns
-      : customColumns;
+  /* ---- workstream helpers ---- */
+
+  const addWorkstream = () => {
+    if (workstreams.length < MAX_WORKSTREAMS) {
+      setWorkstreams([...workstreams, { name: "", template: null, customColumns: ["", "", ""] }]);
+    }
+  };
+
+  const removeWorkstream = (index: number) => {
+    if (workstreams.length > 1) {
+      const next = workstreams.filter((_, i) => i !== index);
+      setWorkstreams(next);
+      if (activeWsIndex >= next.length) setActiveWsIndex(next.length - 1);
+    }
+  };
+
+  const updateWorkstream = (index: number, updates: Partial<WorkstreamConfig>) => {
+    setWorkstreams(workstreams.map((ws, i) => (i === index ? { ...ws, ...updates } : ws)));
+  };
+
+  /* ---- column helpers for active workstream ---- */
+
+  const activeWs = workstreams[activeWsIndex];
+
+  const addColumn = () => {
+    if (activeWs && activeWs.customColumns.length < MAX_COLUMNS) {
+      updateWorkstream(activeWsIndex, {
+        customColumns: [...activeWs.customColumns, ""],
+      });
+    }
+  };
+
+  const removeColumn = (colIndex: number) => {
+    if (activeWs && activeWs.customColumns.length > MIN_COLUMNS) {
+      updateWorkstream(activeWsIndex, {
+        customColumns: activeWs.customColumns.filter((_, i) => i !== colIndex),
+      });
+    }
+  };
+
+  const updateColumn = (colIndex: number, value: string) => {
+    if (activeWs) {
+      updateWorkstream(activeWsIndex, {
+        customColumns: activeWs.customColumns.map((c, i) => (i === colIndex ? value : c)),
+      });
+    }
+  };
 
   /* ---- navigation ---- */
 
-  const goNext = () => {
-    if (step === 1) {
-      if (template === "custom") {
-        setStep(2);
-      } else {
-        // skip to review (step 3 internally, but displayed as step 2 for non-custom)
-        setStep(3);
-      }
-    } else if (step === 2) {
-      setStep(3);
-    }
-  };
-
+  const goNext = () => setStep((s) => Math.min(s + 1, showProjectNameStep ? 4 : 3 + 1));
   const goBack = () => {
-    if (step === 3) {
-      setStep(template === "custom" ? 2 : 1);
-    } else if (step === 2) {
-      setStep(1);
+    if (step === (showProjectNameStep ? 1 : 2) && mode === "manual") {
+      setMode("choose");
+    } else {
+      setStep((s) => Math.max(s - 1, showProjectNameStep ? 1 : 2));
     }
-  };
-
-  /* ---- custom columns helpers ---- */
-
-  const addColumn = () => {
-    if (customColumns.length < MAX_COLUMNS) {
-      setCustomColumns([...customColumns, ""]);
-    }
-  };
-
-  const removeColumn = (index: number) => {
-    if (customColumns.length > MIN_COLUMNS) {
-      setCustomColumns(customColumns.filter((_, i) => i !== index));
-    }
-  };
-
-  const updateColumn = (index: number, value: string) => {
-    setCustomColumns(customColumns.map((c, i) => (i === index ? value : c)));
   };
 
   /* ---- create ---- */
@@ -93,9 +340,24 @@ export const ProjectWizard = ({ onComplete, onCancel }: Props) => {
     if (creating) return;
     setCreating(true);
     try {
-      const columnNames = resolvedColumns.map((c) => c.trim());
-      const board = await api.createBoard(name.trim(), columnNames);
-      onComplete({ id: board.id, name: board.name });
+      let pid = projectId;
+      let pname = projectName.trim();
+
+      // Create project if new
+      if (!pid) {
+        const proj = await api.createProject(pname);
+        pid = proj.id;
+        pname = proj.name;
+      }
+
+      // Batch create workstreams
+      const wsDefs = workstreams.map((ws) => ({
+        name: ws.name.trim(),
+        columns: resolveColumns(ws).map((c) => c.trim()),
+      }));
+
+      await api.createProjectBoard(pid, wsDefs);
+      onComplete({ projectId: pid, projectName: pname });
     } catch {
       setCreating(false);
     }
@@ -103,69 +365,77 @@ export const ProjectWizard = ({ onComplete, onCancel }: Props) => {
 
   /* ---- validation ---- */
 
-  const step1Valid = name.trim().length > 0 && template !== null;
+  const step1Valid = projectName.trim().length > 0;
   const step2Valid =
-    customColumns.length >= MIN_COLUMNS &&
-    customColumns.every((c) => c.trim().length > 0);
+    workstreams.length > 0 && workstreams.every((ws) => ws.name.trim().length > 0);
+  const step3Valid = workstreams.every((ws) => {
+    if (ws.template && ws.template !== "custom") return true;
+    return (
+      ws.customColumns.length >= MIN_COLUMNS &&
+      ws.customColumns.every((c) => c.trim().length > 0)
+    );
+  });
 
-  const canProceed =
-    (step === 1 && step1Valid) ||
-    (step === 2 && step2Valid) ||
-    step === 3;
+  const canProceed = (() => {
+    if (showProjectNameStep) {
+      if (step === 1) return step1Valid;
+      if (step === 2) return step2Valid;
+      if (step === 3) return step3Valid;
+    } else {
+      if (step === 2) return step2Valid;
+      if (step === 3) return step3Valid;
+    }
+    return true;
+  })();
+
+  const reviewStep = showProjectNameStep ? 4 : 3 + 1;
+  const isReviewStep = showProjectNameStep ? step === 4 : step === (3 + 1);
+  // Actually, let's simplify: steps are 1(name?), 2(workstreams), 3(columns), 4(review) or 2,3,4
+  const columnsStep = showProjectNameStep ? 3 : 3;
+  const wsStep = showProjectNameStep ? 2 : 2;
 
   /* ---- step indicator ---- */
 
-  const displayStep = step === 3 ? totalSteps : step;
+  const stepLabels = showProjectNameStep
+    ? ["Project", "Workstreams", "Columns", "Review"]
+    : ["Workstreams", "Columns", "Review"];
+  const displayStepIndex = step - (showProjectNameStep ? 1 : 2);
 
   const StepIndicator = () => (
     <div className="flex items-center justify-center gap-2 mb-8">
-      {Array.from({ length: totalSteps }, (_, i) => {
-        const s = i + 1;
-        const isActive = s === displayStep;
-        const isCompleted = s < displayStep;
+      {stepLabels.map((label, i) => {
+        const isActive = i === displayStepIndex;
+        const isCompleted = i < displayStepIndex;
         return (
-          <div key={s} className="flex items-center gap-2">
+          <div key={i} className="flex items-center gap-2">
             {i > 0 && (
               <div
                 className="h-px w-8"
                 style={{
-                  backgroundColor: isCompleted
-                    ? "var(--primary-blue)"
-                    : "var(--stroke)",
+                  backgroundColor: isCompleted ? "var(--primary-blue)" : "var(--stroke)",
                 }}
               />
             )}
-            <div
-              className="flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold transition-colors"
-              style={{
-                backgroundColor: isActive
-                  ? "var(--primary-blue)"
-                  : isCompleted
-                    ? "var(--primary-blue)"
-                    : "var(--surface)",
-                color: isActive || isCompleted ? "#ffffff" : "var(--gray-text)",
-                border:
-                  !isActive && !isCompleted
-                    ? "1px solid var(--stroke)"
-                    : "none",
-              }}
-            >
-              {isCompleted ? (
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 14 14"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <polyline points="2 7 5.5 10.5 12 3.5" />
-                </svg>
-              ) : (
-                s
-              )}
+            <div className="flex flex-col items-center gap-1">
+              <div
+                className="flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold transition-colors"
+                style={{
+                  backgroundColor: isActive || isCompleted ? "var(--primary-blue)" : "var(--surface)",
+                  color: isActive || isCompleted ? "#ffffff" : "var(--gray-text)",
+                  border: !isActive && !isCompleted ? "1px solid var(--stroke)" : "none",
+                }}
+              >
+                {isCompleted ? (
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="2 7 5.5 10.5 12 3.5" />
+                  </svg>
+                ) : (
+                  i + 1
+                )}
+              </div>
+              <span className="text-[10px] font-semibold" style={{ color: isActive ? "var(--primary-blue)" : "var(--gray-text)" }}>
+                {label}
+              </span>
             </div>
           </div>
         );
@@ -173,90 +443,45 @@ export const ProjectWizard = ({ onComplete, onCancel }: Props) => {
     </div>
   );
 
-  /* ---- template card ---- */
-
-  const TemplateCard = ({
-    id,
-    label,
-    columns,
-    icon,
-  }: {
-    id: Template;
-    label: string;
-    columns: string[];
-    icon: React.ReactNode;
-  }) => {
-    const selected = template === id;
-    return (
-      <button
-        type="button"
-        onClick={() => setTemplate(id)}
-        className="w-full rounded-2xl border p-4 text-left transition hover:border-[var(--primary-blue)]"
-        style={{
-          borderColor: selected ? "var(--primary-blue)" : "var(--stroke)",
-          backgroundColor: selected
-            ? "rgba(32, 157, 215, 0.06)"
-            : "var(--surface-strong)",
-        }}
-      >
-        <div className="flex items-center gap-3 mb-2">
-          <span className="text-lg">{icon}</span>
-          <span
-            className="font-display text-sm font-semibold"
-            style={{
-              color: selected ? "var(--primary-blue)" : "var(--navy-dark)",
-            }}
-          >
-            {label}
-          </span>
-        </div>
-        <div className="flex flex-wrap gap-1.5">
-          {columns.map((col) => (
-            <span
-              key={col}
-              className="rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
-              style={{
-                backgroundColor: "var(--surface)",
-                color: "var(--gray-text)",
-              }}
-            >
-              {col}
-            </span>
-          ))}
-        </div>
-      </button>
-    );
-  };
-
-  /* ---- render ---- */
+  const lastStep = showProjectNameStep ? 4 : 4;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      {/* backdrop */}
-      <div
-        className="absolute inset-0"
-        style={{ backgroundColor: "rgba(3, 33, 71, 0.45)" }}
-        onClick={onCancel}
-      />
+      <div className="absolute inset-0" style={{ backgroundColor: "rgba(3, 33, 71, 0.45)" }} onClick={onCancel} />
 
-      {/* card */}
       <div
-        className="relative z-10 w-full max-w-lg rounded-3xl p-8"
+        className="relative z-10 w-full rounded-3xl p-8 max-h-[90vh] overflow-y-auto"
         style={{
+          maxWidth: mode === "ai" ? "560px" : "580px",
           backgroundColor: "var(--surface-strong)",
           boxShadow: "var(--shadow)",
         }}
       >
         {/* header */}
-        <div className="flex items-center justify-between mb-2">
-          <h2
-            className="font-display text-xl font-bold"
-            style={{ color: "var(--navy-dark)" }}
-          >
-            {step === 1 && "Create Project"}
-            {step === 2 && "Configure Columns"}
-            {step === 3 && "Review & Create"}
-          </h2>
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            {mode === "choose" && (
+              <h2 className="font-display text-xl font-bold" style={{ color: "var(--navy-dark)" }}>
+                {projectId ? "Add Workstreams" : "New Project"}
+              </h2>
+            )}
+            {mode === "manual" && (
+              <h2 className="font-display text-xl font-bold" style={{ color: "var(--navy-dark)" }}>
+                {step === 1 && "Project Name"}
+                {step === 2 && "Define Workstreams"}
+                {step === 3 && "Configure Columns"}
+                {step === 4 && "Review & Create"}
+              </h2>
+            )}
+            {mode === "ai" && (
+              <>
+                <p className="text-xs font-semibold uppercase tracking-[0.25em]" style={{ color: "var(--gray-text)" }}>AI Assistant</p>
+                <h2 className="mt-1 font-display text-xl font-bold" style={{ color: "var(--navy-dark)" }}>
+                  Build Project with AI
+                </h2>
+              </>
+            )}
+          </div>
           {onCancel && (
             <button
               type="button"
@@ -264,15 +489,7 @@ export const ProjectWizard = ({ onComplete, onCancel }: Props) => {
               className="flex h-8 w-8 items-center justify-center rounded-full transition hover:bg-[var(--surface)]"
               style={{ color: "var(--gray-text)" }}
             >
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 16 16"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-              >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                 <line x1="4" y1="4" x2="12" y2="12" />
                 <line x1="12" y1="4" x2="4" y2="12" />
               </svg>
@@ -280,356 +497,337 @@ export const ProjectWizard = ({ onComplete, onCancel }: Props) => {
           )}
         </div>
 
-        <StepIndicator />
-
-        {/* step 1: project details */}
-        {step === 1 && (
-          <div className="space-y-5">
-            <div>
-              <label
-                className="mb-1.5 block text-xs font-semibold uppercase tracking-wide"
-                style={{ color: "var(--gray-text)" }}
-              >
-                Project Name
-              </label>
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="My Awesome Project"
-                className="w-full rounded-xl border bg-white px-4 py-2.5 text-sm font-medium outline-none transition focus:border-[var(--primary-blue)]"
-                style={{
-                  borderColor: "var(--stroke)",
-                  color: "var(--navy-dark)",
-                }}
-                required
-              />
-            </div>
-
-            <div>
-              <label
-                className="mb-1.5 block text-xs font-semibold uppercase tracking-wide"
-                style={{ color: "var(--gray-text)" }}
-              >
-                Description{" "}
-                <span className="normal-case tracking-normal font-normal">
-                  (optional)
-                </span>
-              </label>
-              <textarea
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="Brief description of your project..."
-                rows={2}
-                className="w-full resize-none rounded-xl border bg-white px-4 py-2.5 text-sm outline-none transition focus:border-[var(--primary-blue)]"
-                style={{
-                  borderColor: "var(--stroke)",
-                  color: "var(--navy-dark)",
-                }}
-              />
-            </div>
-
-            <div>
-              <label
-                className="mb-3 block text-xs font-semibold uppercase tracking-wide"
-                style={{ color: "var(--gray-text)" }}
-              >
-                Choose a Template
-              </label>
-              <div className="space-y-3">
-                <TemplateCard
-                  id="software"
-                  label="Software Development"
-                  columns={TEMPLATES.software.columns}
-                  icon={
-                    <svg
-                      width="20"
-                      height="20"
-                      viewBox="0 0 20 20"
-                      fill="none"
-                      stroke="var(--secondary-purple)"
-                      strokeWidth="1.5"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <polyline points="7 7 3 10 7 13" />
-                      <polyline points="13 7 17 10 13 13" />
-                      <line x1="11" y1="5" x2="9" y2="15" />
-                    </svg>
-                  }
-                />
-                <TemplateCard
-                  id="marketing"
-                  label="Marketing Campaign"
-                  columns={TEMPLATES.marketing.columns}
-                  icon={
-                    <svg
-                      width="20"
-                      height="20"
-                      viewBox="0 0 20 20"
-                      fill="none"
-                      stroke="var(--accent-yellow)"
-                      strokeWidth="1.5"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <path d="M3 15 L3 8 L7 8 L7 15" />
-                      <path d="M8 15 L8 5 L12 5 L12 15" />
-                      <path d="M13 15 L13 2 L17 2 L17 15" />
-                    </svg>
-                  }
-                />
-                <TemplateCard
-                  id="simple"
-                  label="Simple Kanban"
-                  columns={TEMPLATES.simple.columns}
-                  icon={
-                    <svg
-                      width="20"
-                      height="20"
-                      viewBox="0 0 20 20"
-                      fill="none"
-                      stroke="var(--primary-blue)"
-                      strokeWidth="1.5"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <rect x="2" y="3" width="5" height="14" rx="1" />
-                      <rect x="8" y="3" width="5" height="10" rx="1" />
-                      <rect x="14" y="3" width="5" height="6" rx="1" />
-                    </svg>
-                  }
-                />
-                <TemplateCard
-                  id="custom"
-                  label="Custom"
-                  columns={["You decide"]}
-                  icon={
-                    <svg
-                      width="20"
-                      height="20"
-                      viewBox="0 0 20 20"
-                      fill="none"
-                      stroke="var(--navy-dark)"
-                      strokeWidth="1.5"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <circle cx="10" cy="10" r="7" />
-                      <line x1="10" y1="7" x2="10" y2="13" />
-                      <line x1="7" y1="10" x2="13" y2="10" />
-                    </svg>
-                  }
-                />
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* step 2: column configuration */}
-        {step === 2 && (
-          <div className="space-y-4">
-            <p className="text-sm" style={{ color: "var(--gray-text)" }}>
-              Define your board columns. You can add up to {MAX_COLUMNS} columns
-              (minimum {MIN_COLUMNS}).
+        {/* mode: choose */}
+        {mode === "choose" && (
+          <div className="space-y-3">
+            <p className="text-sm mb-4" style={{ color: "var(--gray-text)" }}>
+              How would you like to set up your project?
             </p>
+            <button
+              type="button"
+              onClick={() => setMode("manual")}
+              className="w-full rounded-2xl border p-5 text-left transition hover:border-[var(--primary-blue)] hover:bg-[rgba(32,157,215,0.03)]"
+              style={{ borderColor: "var(--stroke)", backgroundColor: "var(--surface-strong)" }}
+            >
+              <div className="flex items-center gap-3 mb-1.5">
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="var(--primary-blue)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2" y="3" width="5" height="14" rx="1" />
+                  <rect x="8" y="3" width="5" height="10" rx="1" />
+                  <rect x="14" y="3" width="5" height="6" rx="1" />
+                </svg>
+                <span className="font-display text-sm font-semibold" style={{ color: "var(--navy-dark)" }}>
+                  Manual Setup
+                </span>
+              </div>
+              <p className="text-xs" style={{ color: "var(--gray-text)" }}>
+                Define workstreams and configure columns for each one.
+              </p>
+            </button>
 
-            <div className="space-y-2.5">
-              {customColumns.map((col, i) => (
-                <div key={i} className="flex items-center gap-2">
-                  {/* drag handle (visual only) */}
-                  <span
-                    className="flex-shrink-0 cursor-grab"
-                    style={{ color: "var(--gray-text)" }}
-                  >
-                    <svg
-                      width="16"
-                      height="16"
-                      viewBox="0 0 16 16"
-                      fill="currentColor"
-                    >
-                      <circle cx="6" cy="4" r="1.2" />
-                      <circle cx="10" cy="4" r="1.2" />
-                      <circle cx="6" cy="8" r="1.2" />
-                      <circle cx="10" cy="8" r="1.2" />
-                      <circle cx="6" cy="12" r="1.2" />
-                      <circle cx="10" cy="12" r="1.2" />
-                    </svg>
-                  </span>
+            <button
+              type="button"
+              onClick={() => setMode("ai")}
+              className="w-full rounded-2xl border p-5 text-left transition hover:border-[var(--secondary-purple)] hover:bg-[rgba(117,57,145,0.03)]"
+              style={{ borderColor: "var(--stroke)", backgroundColor: "var(--surface-strong)" }}
+            >
+              <div className="flex items-center gap-3 mb-1.5">
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="var(--secondary-purple)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="10" cy="10" r="8" />
+                  <path d="M7 10 L9 12 L13 8" />
+                </svg>
+                <span className="font-display text-sm font-semibold" style={{ color: "var(--navy-dark)" }}>
+                  Build with AI Chat
+                </span>
+              </div>
+              <p className="text-xs" style={{ color: "var(--gray-text)" }}>
+                Describe your project and the AI will design the full board with workstreams, columns, and cards.
+              </p>
+            </button>
 
-                  <input
-                    value={col}
-                    onChange={(e) => updateColumn(i, e.target.value)}
-                    placeholder={`Column ${i + 1}`}
-                    className="flex-1 rounded-xl border bg-white px-4 py-2.5 text-sm font-medium outline-none transition focus:border-[var(--primary-blue)]"
-                    style={{
-                      borderColor: "var(--stroke)",
-                      color: "var(--navy-dark)",
-                    }}
-                    required
-                  />
-
-                  <button
-                    type="button"
-                    onClick={() => removeColumn(i)}
-                    disabled={customColumns.length <= MIN_COLUMNS}
-                    className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full transition hover:bg-[var(--surface)] disabled:opacity-30 disabled:cursor-not-allowed"
-                    style={{ color: "var(--gray-text)" }}
-                  >
-                    <svg
-                      width="14"
-                      height="14"
-                      viewBox="0 0 14 14"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                    >
-                      <line x1="3" y1="7" x2="11" y2="7" />
-                    </svg>
-                  </button>
-                </div>
-              ))}
-            </div>
-
-            {customColumns.length < MAX_COLUMNS && (
-              <button
-                type="button"
-                onClick={addColumn}
-                className="w-full rounded-full border border-dashed px-3 py-2.5 text-xs font-semibold uppercase tracking-wide transition hover:border-[var(--primary-blue)]"
-                style={{
-                  borderColor: "var(--stroke)",
-                  color: "var(--primary-blue)",
-                }}
-              >
-                + Add Column
-              </button>
+            {onCancel && (
+              <div className="pt-2 flex justify-end">
+                <button
+                  type="button"
+                  onClick={onCancel}
+                  className="rounded-full border px-5 py-2.5 text-xs font-semibold uppercase tracking-wide transition hover:text-[var(--navy-dark)]"
+                  style={{ borderColor: "var(--stroke)", color: "var(--gray-text)" }}
+                >
+                  Cancel
+                </button>
+              </div>
             )}
           </div>
         )}
 
-        {/* step 3: review */}
-        {step === 3 && (
-          <div className="space-y-5">
-            <div
-              className="rounded-2xl p-5 space-y-4"
-              style={{ backgroundColor: "var(--surface)" }}
-            >
-              <div>
-                <span
-                  className="block text-[10px] font-semibold uppercase tracking-wide mb-1"
-                  style={{ color: "var(--gray-text)" }}
-                >
-                  Project Name
-                </span>
-                <span
-                  className="font-display text-base font-bold"
-                  style={{ color: "var(--navy-dark)" }}
-                >
-                  {name.trim()}
-                </span>
-              </div>
-
-              {description.trim() && (
-                <div>
-                  <span
-                    className="block text-[10px] font-semibold uppercase tracking-wide mb-1"
-                    style={{ color: "var(--gray-text)" }}
-                  >
-                    Description
-                  </span>
-                  <span className="text-sm" style={{ color: "var(--navy-dark)" }}>
-                    {description.trim()}
-                  </span>
-                </div>
-              )}
-
-              <div>
-                <span
-                  className="block text-[10px] font-semibold uppercase tracking-wide mb-2"
-                  style={{ color: "var(--gray-text)" }}
-                >
-                  Columns
-                </span>
-                <div className="flex flex-wrap gap-2">
-                  {resolvedColumns.map((col, i) => (
-                    <span
-                      key={i}
-                      className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold"
-                      style={{
-                        backgroundColor: "var(--surface-strong)",
-                        color: "var(--navy-dark)",
-                        border: "1px solid var(--stroke)",
-                      }}
-                    >
-                      <span
-                        className="h-2 w-2 rounded-full"
-                        style={{ backgroundColor: "var(--primary-blue)" }}
-                      />
-                      {col.trim()}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
+        {/* mode: ai */}
+        {mode === "ai" && (
+          <AIBoardChat
+            projectId={projectId}
+            onComplete={onComplete}
+            onSwitchToManual={() => setMode("manual")}
+          />
         )}
 
-        {/* footer buttons */}
-        <div className="mt-8 flex items-center justify-between">
-          <div>
-            {step > 1 && (
+        {/* mode: manual */}
+        {mode === "manual" && (
+          <>
+            <StepIndicator />
+
+            {/* Step 1: Project name (new projects only) */}
+            {step === 1 && showProjectNameStep && (
+              <div className="space-y-5">
+                <div>
+                  <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--gray-text)" }}>
+                    Project Name
+                  </label>
+                  <input
+                    value={projectName}
+                    onChange={(e) => setProjectName(e.target.value)}
+                    placeholder="e.g. LLC Formation"
+                    className="w-full rounded-xl border bg-white px-4 py-2.5 text-sm font-medium outline-none transition focus:border-[var(--primary-blue)]"
+                    style={{ borderColor: "var(--stroke)", color: "var(--navy-dark)" }}
+                    autoFocus
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Step 2: Define workstreams */}
+            {step === 2 && (
+              <div className="space-y-4">
+                <p className="text-sm" style={{ color: "var(--gray-text)" }}>
+                  Add the workstreams for your project. Each workstream will have its own set of columns.
+                </p>
+                <div className="space-y-3">
+                  {workstreams.map((ws, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <span
+                        className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white"
+                        style={{ backgroundColor: "var(--primary-blue)" }}
+                      >
+                        {i + 1}
+                      </span>
+                      <input
+                        value={ws.name}
+                        onChange={(e) => updateWorkstream(i, { name: e.target.value })}
+                        placeholder={`Workstream ${i + 1} name`}
+                        className="flex-1 rounded-xl border bg-white px-4 py-2.5 text-sm font-medium outline-none transition focus:border-[var(--primary-blue)]"
+                        style={{ borderColor: "var(--stroke)", color: "var(--navy-dark)" }}
+                        autoFocus={i === workstreams.length - 1}
+                      />
+                      {workstreams.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => removeWorkstream(i)}
+                          className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full transition hover:bg-[var(--surface)]"
+                          style={{ color: "var(--gray-text)" }}
+                        >
+                          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                            <line x1="3" y1="7" x2="11" y2="7" />
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                {workstreams.length < MAX_WORKSTREAMS && (
+                  <button
+                    type="button"
+                    onClick={addWorkstream}
+                    className="w-full rounded-full border border-dashed px-3 py-2.5 text-xs font-semibold uppercase tracking-wide transition hover:border-[var(--primary-blue)]"
+                    style={{ borderColor: "var(--stroke)", color: "var(--primary-blue)" }}
+                  >
+                    + Add Workstream
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Step 3: Configure columns per workstream */}
+            {step === 3 && (
+              <div className="space-y-5">
+                {/* Workstream selector tabs */}
+                {workstreams.length > 1 && (
+                  <div className="flex flex-wrap gap-2">
+                    {workstreams.map((ws, i) => {
+                      const isActive = i === activeWsIndex;
+                      const hasTemplate = ws.template !== null;
+                      return (
+                        <button
+                          key={i}
+                          type="button"
+                          onClick={() => setActiveWsIndex(i)}
+                          className={`rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] transition ${
+                            isActive
+                              ? "bg-[var(--primary-blue)] text-white shadow-sm"
+                              : "border border-[var(--stroke)] text-[var(--gray-text)] hover:border-[var(--primary-blue)] hover:text-[var(--primary-blue)]"
+                          }`}
+                        >
+                          {ws.name || `WS ${i + 1}`}
+                          {hasTemplate && !isActive && (
+                            <svg className="ml-1.5 inline" width="10" height="10" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="2 7 5.5 10.5 12 3.5" />
+                            </svg>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <div>
+                  <p className="text-sm mb-4" style={{ color: "var(--gray-text)" }}>
+                    Choose a column template for <strong style={{ color: "var(--navy-dark)" }}>{activeWs?.name || `Workstream ${activeWsIndex + 1}`}</strong>
+                  </p>
+
+                  {/* Templates */}
+                  <div className="space-y-3">
+                    {(Object.keys(TEMPLATES) as Exclude<Template, "custom">[]).map((key) => (
+                      <TemplateCard
+                        key={key}
+                        id={key}
+                        label={TEMPLATES[key].label}
+                        columns={TEMPLATES[key].columns}
+                        icon={TEMPLATE_ICONS[key]}
+                        selected={activeWs?.template === key}
+                        onSelect={() => updateWorkstream(activeWsIndex, { template: key })}
+                      />
+                    ))}
+                    <TemplateCard
+                      id="custom"
+                      label="Custom"
+                      columns={["You decide"]}
+                      icon={TEMPLATE_ICONS.custom}
+                      selected={activeWs?.template === "custom"}
+                      onSelect={() => updateWorkstream(activeWsIndex, { template: "custom" })}
+                    />
+                  </div>
+
+                  {/* Custom columns editor */}
+                  {activeWs?.template === "custom" && (
+                    <div className="mt-5 space-y-3">
+                      <p className="text-sm" style={{ color: "var(--gray-text)" }}>
+                        Define columns (min {MIN_COLUMNS}, max {MAX_COLUMNS}):
+                      </p>
+                      <div className="space-y-2.5">
+                        {activeWs.customColumns.map((col, i) => (
+                          <div key={i} className="flex items-center gap-2">
+                            <input
+                              value={col}
+                              onChange={(e) => updateColumn(i, e.target.value)}
+                              placeholder={`Column ${i + 1}`}
+                              className="flex-1 rounded-xl border bg-white px-4 py-2.5 text-sm font-medium outline-none transition focus:border-[var(--primary-blue)]"
+                              style={{ borderColor: "var(--stroke)", color: "var(--navy-dark)" }}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => removeColumn(i)}
+                              disabled={activeWs.customColumns.length <= MIN_COLUMNS}
+                              className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full transition hover:bg-[var(--surface)] disabled:opacity-30 disabled:cursor-not-allowed"
+                              style={{ color: "var(--gray-text)" }}
+                            >
+                              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                <line x1="3" y1="7" x2="11" y2="7" />
+                              </svg>
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      {activeWs.customColumns.length < MAX_COLUMNS && (
+                        <button
+                          type="button"
+                          onClick={addColumn}
+                          className="w-full rounded-full border border-dashed px-3 py-2.5 text-xs font-semibold uppercase tracking-wide transition hover:border-[var(--primary-blue)]"
+                          style={{ borderColor: "var(--stroke)", color: "var(--primary-blue)" }}
+                        >
+                          + Add Column
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Step 4: Review */}
+            {step === 4 && (
+              <div className="space-y-5">
+                <div className="rounded-2xl p-5 space-y-5" style={{ backgroundColor: "var(--surface)" }}>
+                  {showProjectNameStep && (
+                    <div>
+                      <span className="block text-[10px] font-semibold uppercase tracking-wide mb-1" style={{ color: "var(--gray-text)" }}>
+                        Project
+                      </span>
+                      <span className="font-display text-base font-bold" style={{ color: "var(--navy-dark)" }}>
+                        {projectName.trim()}
+                      </span>
+                    </div>
+                  )}
+
+                  <div>
+                    <span className="block text-[10px] font-semibold uppercase tracking-wide mb-3" style={{ color: "var(--gray-text)" }}>
+                      Workstreams ({workstreams.length})
+                    </span>
+                    <div className="space-y-4">
+                      {workstreams.map((ws, i) => (
+                        <div key={i} className="rounded-xl p-4" style={{ backgroundColor: "var(--surface-strong)", border: "1px solid var(--stroke)" }}>
+                          <span className="font-display text-sm font-bold" style={{ color: "var(--navy-dark)" }}>
+                            {ws.name.trim()}
+                          </span>
+                          <div className="flex flex-wrap gap-1.5 mt-2">
+                            {resolveColumns(ws).map((col, j) => (
+                              <span key={j} className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold"
+                                style={{ backgroundColor: "var(--surface)", color: "var(--navy-dark)", border: "1px solid var(--stroke)" }}>
+                                <span className="h-2 w-2 rounded-full" style={{ backgroundColor: "var(--primary-blue)" }} />
+                                {col.trim()}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* footer */}
+            <div className="mt-8 flex items-center justify-between">
               <button
                 type="button"
                 onClick={goBack}
                 className="rounded-full border px-5 py-2.5 text-xs font-semibold uppercase tracking-wide transition hover:text-[var(--navy-dark)]"
-                style={{
-                  borderColor: "var(--stroke)",
-                  color: "var(--gray-text)",
-                }}
+                style={{ borderColor: "var(--stroke)", color: "var(--gray-text)" }}
               >
                 Back
               </button>
-            )}
-          </div>
 
-          <div className="flex items-center gap-3">
-            {onCancel && step === 1 && (
-              <button
-                type="button"
-                onClick={onCancel}
-                className="rounded-full border px-5 py-2.5 text-xs font-semibold uppercase tracking-wide transition hover:text-[var(--navy-dark)]"
-                style={{
-                  borderColor: "var(--stroke)",
-                  color: "var(--gray-text)",
-                }}
-              >
-                Cancel
-              </button>
-            )}
-
-            {step < 3 ? (
-              <button
-                type="button"
-                onClick={goNext}
-                disabled={!canProceed}
-                className="rounded-full px-6 py-2.5 text-xs font-semibold uppercase tracking-wide text-white transition hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed"
-                style={{ backgroundColor: "var(--primary-blue)" }}
-              >
-                Next
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={handleCreate}
-                disabled={creating}
-                className="rounded-full px-6 py-2.5 text-xs font-semibold uppercase tracking-wide text-white transition hover:brightness-110 disabled:opacity-50"
-                style={{ backgroundColor: "var(--secondary-purple)" }}
-              >
-                {creating ? "Creating..." : "Create Project"}
-              </button>
-            )}
-          </div>
-        </div>
+              <div className="flex items-center gap-3">
+                {step < 4 ? (
+                  <button
+                    type="button"
+                    onClick={goNext}
+                    disabled={!canProceed}
+                    className="rounded-full px-6 py-2.5 text-xs font-semibold uppercase tracking-wide text-white transition hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed"
+                    style={{ backgroundColor: "var(--primary-blue)" }}
+                  >
+                    Next
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleCreate}
+                    disabled={creating}
+                    className="rounded-full px-6 py-2.5 text-xs font-semibold uppercase tracking-wide text-white transition hover:brightness-110 disabled:opacity-50"
+                    style={{ backgroundColor: "var(--secondary-purple)" }}
+                  >
+                    {creating ? "Creating..." : "Create Project"}
+                  </button>
+                )}
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

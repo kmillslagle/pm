@@ -1,5 +1,6 @@
 import json
 import os
+import re
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -10,7 +11,7 @@ from app.database import get_connection
 router = APIRouter(prefix="/api")
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-MODEL = "claude-sonnet-4-20250514"
+MODEL = "claude-opus-4-6"
 
 class ChatRequest(BaseModel):
     message: str
@@ -41,16 +42,20 @@ def _get_board_json(board_id: int) -> dict:
     cards = {}
     for col in cols:
         card_rows = conn.execute(
-            "SELECT id, title, details, priority, notes, due_date, subtasks "
+            "SELECT id, title, details, priority, notes, due_date, subtasks, dependencies, deliverable_type, key_references "
             "FROM cards WHERE column_id = ? ORDER BY position",
             (col["id"],)
         ).fetchall()
         card_ids = []
         for card in card_rows:
+            row = dict(card)
             cards[card["id"]] = {
-                "id": card["id"], "title": card["title"], "details": card["details"],
-                "priority": card["priority"], "notes": card["notes"],
-                "due_date": card["due_date"], "subtasks": card["subtasks"],
+                "id": row["id"], "title": row["title"], "details": row["details"],
+                "priority": row["priority"], "notes": row.get("notes", ""),
+                "due_date": row.get("due_date"), "subtasks": row.get("subtasks", "[]"),
+                "dependencies": row.get("dependencies", "[]"),
+                "deliverable_type": row.get("deliverable_type", ""),
+                "key_references": row.get("key_references", ""),
             }
             card_ids.append(card["id"])
         columns.append({"id": col["id"], "title": col["title"], "cardIds": card_ids})
@@ -246,16 +251,13 @@ def chat(body: ChatRequest, request: Request, board_id: int = Query(...)) -> Cha
 
     response = client.messages.create(
         model=MODEL,
-        max_tokens=4096,
+        max_tokens=16384,
         system=SYSTEM_PROMPT,
         messages=messages,
     )
 
     raw = response.content[0].text if response.content else "{}"
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        parsed = {"reply": raw}
+    parsed = _parse_ai_response(raw)
 
     reply = parsed.get("reply", "I could not generate a response.")
     board_updates_raw = parsed.get("board_updates", [])
@@ -275,3 +277,54 @@ def chat_history(request: Request, board_id: int = Query(...)) -> list[dict]:
     username = get_current_user(request)
     _verify_board_owner(board_id, username)
     return _get_chat_history(board_id, limit=50)
+
+
+class BuildRequest(BaseModel):
+    message: str
+    history: list[dict] = []
+
+
+def _parse_ai_response(raw: str) -> dict:
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        match = re.search(r'\{[\s\S]*\}', raw)
+        if match:
+            try:
+                return json.loads(match.group())
+            except json.JSONDecodeError:
+                pass
+        return {"reply": raw}
+
+
+@router.post("/boards/ai-build")
+def ai_build(body: BuildRequest, request: Request) -> ChatResponse:
+    """Stateless AI board builder — client manages conversation history."""
+    get_current_user(request)  # verify auth only
+
+    messages = [
+        {"role": "user", "content": "Current board state:\n{}"},
+        {"role": "assistant", "content": "I'm ready to help you design a new Kanban board. Describe your project and I'll build it for you."},
+    ]
+    messages.extend(body.history)
+    messages.append({"role": "user", "content": body.message})
+
+    if not ANTHROPIC_API_KEY:
+        return ChatResponse(reply="AI is not configured. Set ANTHROPIC_API_KEY in your .env file.")
+
+    import anthropic
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=16384,
+        system=SYSTEM_PROMPT,
+        messages=messages,
+    )
+
+    raw = response.content[0].text if response.content else "{}"
+    parsed = _parse_ai_response(raw)
+
+    reply = parsed.get("reply", "I could not generate a response.")
+    create_board_data = parsed.get("create_board", None)
+
+    return ChatResponse(reply=reply, board_updates=[], create_board=create_board_data)

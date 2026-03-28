@@ -15,6 +15,9 @@ type CardDetailModalProps = {
       notes?: string;
       due_date?: string;
       subtasks?: Subtask[];
+      dependencies?: string[];
+      deliverable_type?: string;
+      key_references?: string;
     }
   ) => void;
   onDelete: (cardId: string) => void;
@@ -28,6 +31,10 @@ const PRIORITIES: { value: string; label: string; color: string }[] = [
   { value: "none", label: "None", color: "#888888" },
 ];
 
+const DELIVERABLE_PRESETS = [
+  "Memo", "Draft Amendment", "Agreement", "Analysis", "Checklist", "Policy", "Template",
+];
+
 export const CardDetailModal = ({
   card,
   columns,
@@ -36,30 +43,52 @@ export const CardDetailModal = ({
   onClose,
 }: CardDetailModalProps) => {
   const [title, setTitle] = useState(card.title);
+  const [details, setDetails] = useState(card.details ?? "");
+  const [priority, setPriority] = useState<string>(card.priority ?? "none");
   const [notes, setNotes] = useState(card.notes ?? "");
+  const [keyReferences, setKeyReferences] = useState(card.keyReferences ?? "");
+  const [deliverableType, setDeliverableType] = useState(card.deliverableType ?? "");
+  const [customDeliverable, setCustomDeliverable] = useState(
+    card.deliverableType && !DELIVERABLE_PRESETS.includes(card.deliverableType)
+      ? card.deliverableType
+      : ""
+  );
+  const [dueDate, setDueDate] = useState(card.dueDate ?? "");
+  const [deps, setDeps] = useState<string[]>(
+    Array.isArray(card.dependencies) ? card.dependencies : []
+  );
+  const [subtasks, setSubtasks] = useState<Subtask[]>(
+    Array.isArray(card.subtasks) ? card.subtasks : []
+  );
+  const [newDep, setNewDep] = useState("");
   const [newSubtaskTitle, setNewSubtaskTitle] = useState("");
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [saved, setSaved] = useState(false);
 
-  const handleTitleBlur = () => {
-    if (title.trim() && title !== card.title) {
-      onSave(card.id, { title: title.trim() });
-    }
+  const isPreset = DELIVERABLE_PRESETS.includes(deliverableType);
+
+  const handleSelectDeliverable = (dt: string) => {
+    setDeliverableType(dt);
+    setCustomDeliverable("");
   };
 
-  const handleNotesBlur = () => {
-    if (notes !== (card.notes ?? "")) {
-      onSave(card.id, { notes });
-    }
+  const handleCustomDeliverableChange = (value: string) => {
+    setCustomDeliverable(value);
+    setDeliverableType(value);
   };
 
-  const handlePriorityChange = (priority: string) => {
-    onSave(card.id, { priority });
+  // Dependencies
+  const handleAddDep = () => {
+    if (!newDep.trim()) return;
+    setDeps([...deps, newDep.trim()]);
+    setNewDep("");
   };
 
-  const handleDueDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    onSave(card.id, { due_date: e.target.value || "" });
+  const handleRemoveDep = (index: number) => {
+    setDeps(deps.filter((_, i) => i !== index));
   };
 
+  // Subtasks
   const handleAddSubtask = () => {
     if (!newSubtaskTitle.trim()) return;
     const newSubtask: Subtask = {
@@ -67,21 +96,35 @@ export const CardDetailModal = ({
       title: newSubtaskTitle.trim(),
       done: false,
     };
-    const updated = [...(card.subtasks ?? []), newSubtask];
-    onSave(card.id, { subtasks: updated });
+    setSubtasks([...subtasks, newSubtask]);
     setNewSubtaskTitle("");
   };
 
   const handleSubtaskToggle = (subtaskId: string) => {
-    const updated = (card.subtasks ?? []).map((s) =>
+    setSubtasks(subtasks.map((s) =>
       s.id === subtaskId ? { ...s, done: !s.done } : s
-    );
-    onSave(card.id, { subtasks: updated });
+    ));
   };
 
   const handleSubtaskDelete = (subtaskId: string) => {
-    const updated = (card.subtasks ?? []).filter((s) => s.id !== subtaskId);
-    onSave(card.id, { subtasks: updated });
+    setSubtasks(subtasks.filter((s) => s.id !== subtaskId));
+  };
+
+  // Save all fields at once
+  const handleSave = () => {
+    onSave(card.id, {
+      title: title.trim(),
+      details,
+      priority,
+      notes,
+      due_date: dueDate,
+      subtasks,
+      dependencies: deps,
+      deliverable_type: deliverableType,
+      key_references: keyReferences,
+    });
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1500);
   };
 
   const handleDeleteCard = () => {
@@ -94,7 +137,6 @@ export const CardDetailModal = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      {/* backdrop */}
       <div
         className="absolute inset-0"
         style={{ backgroundColor: "rgba(3, 33, 71, 0.45)" }}
@@ -102,7 +144,6 @@ export const CardDetailModal = ({
         data-testid="modal-backdrop"
       />
 
-      {/* modal */}
       <div
         className="relative z-10 w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-3xl p-8"
         style={{
@@ -111,7 +152,6 @@ export const CardDetailModal = ({
         }}
         data-testid="card-detail-modal"
       >
-        {/* close button */}
         <div className="flex items-center justify-between mb-6">
           <p className="text-xs font-semibold uppercase tracking-[0.25em] text-[var(--gray-text)]">
             Card Details
@@ -123,15 +163,7 @@ export const CardDetailModal = ({
             style={{ color: "var(--gray-text)" }}
             aria-label="Close"
           >
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 16 16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-            >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
               <line x1="4" y1="4" x2="12" y2="12" />
               <line x1="12" y1="4" x2="4" y2="12" />
             </svg>
@@ -147,9 +179,22 @@ export const CardDetailModal = ({
             <input
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              onBlur={handleTitleBlur}
               className="w-full rounded-xl border border-[var(--stroke)] bg-white px-4 py-2.5 font-display text-base font-semibold text-[var(--navy-dark)] outline-none transition focus:border-[var(--primary-blue)]"
               data-testid="card-title-input"
+            />
+          </div>
+
+          {/* Description */}
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[var(--gray-text)]">
+              Description
+            </label>
+            <textarea
+              value={details}
+              onChange={(e) => setDetails(e.target.value)}
+              placeholder="2-4 sentences defining scope and deliverable..."
+              rows={3}
+              className="w-full resize-none rounded-xl border border-[var(--stroke)] bg-white px-4 py-2.5 text-sm text-[var(--navy-dark)] outline-none transition focus:border-[var(--primary-blue)]"
             />
           </div>
 
@@ -160,19 +205,17 @@ export const CardDetailModal = ({
             </label>
             <div className="flex gap-2">
               {PRIORITIES.map((p) => {
-                const isActive = (card.priority ?? "none") === p.value;
+                const isActive = priority === p.value;
                 return (
                   <button
                     key={p.value}
                     type="button"
-                    onClick={() => handlePriorityChange(p.value)}
+                    onClick={() => setPriority(p.value)}
                     className="rounded-full px-3 py-1.5 text-xs font-semibold transition"
                     style={{
                       backgroundColor: isActive ? p.color : "var(--surface)",
                       color: isActive ? "#ffffff" : "var(--gray-text)",
-                      border: isActive
-                        ? "none"
-                        : "1px solid var(--stroke)",
+                      border: isActive ? "none" : "1px solid var(--stroke)",
                     }}
                     data-testid={`priority-${p.value}`}
                   >
@@ -180,6 +223,116 @@ export const CardDetailModal = ({
                   </button>
                 );
               })}
+            </div>
+          </div>
+
+          {/* Deliverable Type */}
+          <div>
+            <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-[var(--gray-text)]">
+              Deliverable Type
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {DELIVERABLE_PRESETS.map((dt) => {
+                const isActive = deliverableType === dt;
+                return (
+                  <button
+                    key={dt}
+                    type="button"
+                    onClick={() => handleSelectDeliverable(dt)}
+                    className="rounded-full px-3 py-1.5 text-xs font-semibold transition"
+                    style={{
+                      backgroundColor: isActive ? "var(--primary-blue)" : "var(--surface)",
+                      color: isActive ? "#ffffff" : "var(--gray-text)",
+                      border: isActive ? "none" : "1px solid var(--stroke)",
+                    }}
+                  >
+                    {dt}
+                  </button>
+                );
+              })}
+            </div>
+            {/* Custom deliverable type input */}
+            <div className="mt-2 flex items-center gap-2">
+              <input
+                value={customDeliverable}
+                onChange={(e) => handleCustomDeliverableChange(e.target.value)}
+                placeholder="Or type a custom deliverable type..."
+                className="flex-1 rounded-xl border border-[var(--stroke)] bg-white px-3 py-2 text-sm text-[var(--navy-dark)] outline-none transition focus:border-[var(--primary-blue)]"
+              />
+              {deliverableType && (
+                <button
+                  type="button"
+                  onClick={() => { setDeliverableType(""); setCustomDeliverable(""); }}
+                  className="rounded-full border border-[var(--stroke)] px-3 py-1.5 text-xs font-semibold text-[var(--gray-text)] transition hover:text-[var(--navy-dark)]"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Key References */}
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-[var(--gray-text)]">
+              Key References
+            </label>
+            <textarea
+              value={keyReferences}
+              onChange={(e) => setKeyReferences(e.target.value)}
+              placeholder="OA sections, trust instrument articles, statutes, IRC provisions..."
+              rows={2}
+              className="w-full resize-none rounded-xl border border-[var(--stroke)] bg-white px-4 py-2.5 text-sm text-[var(--navy-dark)] outline-none transition focus:border-[var(--primary-blue)]"
+            />
+          </div>
+
+          {/* Dependencies */}
+          <div>
+            <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-[var(--gray-text)]">
+              Dependencies
+            </label>
+            {deps.length > 0 && (
+              <div className="flex flex-wrap gap-2 mb-2">
+                {deps.map((dep, i) => (
+                  <span
+                    key={i}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-[var(--stroke)] bg-[var(--surface)] px-3 py-1 text-xs text-[var(--navy-dark)]"
+                  >
+                    {dep}
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveDep(i)}
+                      className="text-[var(--gray-text)] hover:text-red-500"
+                    >
+                      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                        <line x1="2" y1="2" x2="8" y2="8" />
+                        <line x1="8" y1="2" x2="2" y2="8" />
+                      </svg>
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              <input
+                value={newDep}
+                onChange={(e) => setNewDep(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    handleAddDep();
+                  }
+                }}
+                placeholder="Card title or ID..."
+                className="flex-1 rounded-xl border border-[var(--stroke)] bg-white px-3 py-2 text-sm text-[var(--navy-dark)] outline-none transition focus:border-[var(--primary-blue)]"
+              />
+              <button
+                type="button"
+                onClick={handleAddDep}
+                disabled={!newDep.trim()}
+                className="rounded-full bg-[var(--primary-blue)] px-3 py-2 text-xs font-semibold text-white transition hover:brightness-110 disabled:opacity-40"
+              >
+                Add
+              </button>
             </div>
           </div>
 
@@ -191,9 +344,8 @@ export const CardDetailModal = ({
             <textarea
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
-              onBlur={handleNotesBlur}
               placeholder="Add notes..."
-              rows={3}
+              rows={4}
               className="w-full resize-none rounded-xl border border-[var(--stroke)] bg-white px-4 py-2.5 text-sm text-[var(--navy-dark)] outline-none transition focus:border-[var(--primary-blue)]"
               data-testid="card-notes-input"
             />
@@ -206,8 +358,8 @@ export const CardDetailModal = ({
             </label>
             <input
               type="date"
-              value={card.dueDate ?? ""}
-              onChange={handleDueDateChange}
+              value={dueDate}
+              onChange={(e) => setDueDate(e.target.value)}
               className="w-full rounded-xl border border-[var(--stroke)] bg-white px-4 py-2.5 text-sm text-[var(--navy-dark)] outline-none transition focus:border-[var(--primary-blue)]"
               data-testid="card-due-date-input"
             />
@@ -219,7 +371,7 @@ export const CardDetailModal = ({
               Subtasks
             </label>
             <div className="space-y-2">
-              {(card.subtasks ?? []).map((subtask) => (
+              {subtasks.map((subtask) => (
                 <div
                   key={subtask.id}
                   className="flex items-center gap-2 rounded-xl border border-[var(--stroke)] bg-white px-3 py-2"
@@ -247,15 +399,7 @@ export const CardDetailModal = ({
                     aria-label={`Delete subtask ${subtask.title}`}
                     data-testid={`subtask-delete-${subtask.id}`}
                   >
-                    <svg
-                      width="12"
-                      height="12"
-                      viewBox="0 0 12 12"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                    >
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                       <line x1="2" y1="2" x2="10" y2="10" />
                       <line x1="10" y1="2" x2="2" y2="10" />
                     </svg>
@@ -263,7 +407,6 @@ export const CardDetailModal = ({
                 </div>
               ))}
 
-              {/* Add subtask */}
               <div className="flex items-center gap-2">
                 <input
                   value={newSubtaskTitle}
@@ -291,26 +434,37 @@ export const CardDetailModal = ({
             </div>
           </div>
 
-          {/* Delete Card */}
-          <div className="border-t border-[var(--stroke)] pt-6">
-            <button
-              type="button"
-              onClick={handleDeleteCard}
-              className="rounded-full px-5 py-2.5 text-xs font-semibold uppercase tracking-wide text-white transition hover:brightness-110"
-              style={{ backgroundColor: confirmingDelete ? "#dc2626" : "#ef4444" }}
-              data-testid="delete-card-btn"
-            >
-              {confirmingDelete ? "Confirm Delete" : "Delete Card"}
-            </button>
-            {confirmingDelete && (
+          {/* Actions: Save + Delete */}
+          <div className="flex items-center justify-between border-t border-[var(--stroke)] pt-6">
+            <div>
               <button
                 type="button"
-                onClick={() => setConfirmingDelete(false)}
-                className="ml-3 rounded-full border border-[var(--stroke)] px-5 py-2.5 text-xs font-semibold uppercase tracking-wide text-[var(--gray-text)] transition hover:text-[var(--navy-dark)]"
+                onClick={handleDeleteCard}
+                className="rounded-full px-5 py-2.5 text-xs font-semibold uppercase tracking-wide text-white transition hover:brightness-110"
+                style={{ backgroundColor: confirmingDelete ? "#dc2626" : "#ef4444" }}
+                data-testid="delete-card-btn"
               >
-                Cancel
+                {confirmingDelete ? "Confirm Delete" : "Delete Card"}
               </button>
-            )}
+              {confirmingDelete && (
+                <button
+                  type="button"
+                  onClick={() => setConfirmingDelete(false)}
+                  className="ml-2 rounded-full border border-[var(--stroke)] px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-[var(--gray-text)] transition hover:text-[var(--navy-dark)]"
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={handleSave}
+              className="rounded-full px-6 py-2.5 text-xs font-semibold uppercase tracking-wide text-white transition hover:brightness-110"
+              style={{ backgroundColor: saved ? "#22c55e" : "var(--primary-blue)" }}
+            >
+              {saved ? "Saved!" : "Save"}
+            </button>
           </div>
         </div>
       </div>

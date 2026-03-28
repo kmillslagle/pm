@@ -1,4 +1,3 @@
-import { useRef } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import clsx from "clsx";
@@ -16,59 +15,40 @@ const PRIORITY_COLORS: Record<string, string> = {
   low: "#209dd7",
 };
 
+const PRIORITY_LABELS: Record<string, string> = {
+  high: "H",
+  medium: "M",
+  low: "L",
+};
+
 export const KanbanCard = ({ card, onDelete, onCardClick }: KanbanCardProps) => {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: card.id });
-
-  const mouseDownPos = useRef<{ x: number; y: number } | null>(null);
 
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
   };
 
-  const handleMouseDown = (e: React.MouseEvent) => {
-    mouseDownPos.current = { x: e.clientX, y: e.clientY };
-  };
-
-  const handleMouseUp = (e: React.MouseEvent) => {
-    if (!mouseDownPos.current) return;
-    const dx = Math.abs(e.clientX - mouseDownPos.current.x);
-    const dy = Math.abs(e.clientY - mouseDownPos.current.y);
-    // Only trigger click if mouse didn't move significantly (not a drag)
-    if (dx < 5 && dy < 5 && onCardClick) {
-      onCardClick(card.id);
-    }
-    mouseDownPos.current = null;
-  };
-
-  const doneCount = card.subtasks?.filter((s) => s.done).length ?? 0;
-  const totalCount = card.subtasks?.length ?? 0;
-
   return (
     <article
       ref={setNodeRef}
       style={style}
       className={clsx(
-        "rounded-2xl border border-transparent bg-white px-4 py-4 shadow-[0_12px_24px_rgba(3,33,71,0.08)]",
-        "transition-all duration-150",
-        isDragging && "opacity-60 shadow-[0_18px_32px_rgba(3,33,71,0.16)]"
+        "group rounded-xl border border-transparent bg-white px-3.5 py-3 shadow-[0_4px_12px_rgba(3,33,71,0.06)]",
+        "transition-all duration-150 hover:shadow-[0_8px_20px_rgba(3,33,71,0.1)] hover:border-[var(--stroke)]",
+        isDragging && "opacity-60 shadow-[0_12px_24px_rgba(3,33,71,0.14)]",
       )}
       data-testid={`card-${card.id}`}
     >
-      <div className="flex items-start gap-2">
-        {/* Drag handle */}
+      {/* Top row: drag handle + title + priority */}
+      <div className="flex items-center gap-2">
         <span
-          className="mt-1 flex-shrink-0 cursor-grab text-[var(--gray-text)] hover:text-[var(--navy-dark)]"
+          className="flex-shrink-0 cursor-grab text-[var(--gray-text)] opacity-0 transition group-hover:opacity-100"
           {...attributes}
           {...listeners}
         >
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 16 16"
-            fill="currentColor"
-          >
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
             <circle cx="5" cy="4" r="1.3" />
             <circle cx="11" cy="4" r="1.3" />
             <circle cx="5" cy="8" r="1.3" />
@@ -78,49 +58,48 @@ export const KanbanCard = ({ card, onDelete, onCardClick }: KanbanCardProps) => 
           </svg>
         </span>
 
-        {/* Card body — clickable */}
-        <div
-          className="flex-1 cursor-pointer"
-          onMouseDown={handleMouseDown}
-          onMouseUp={handleMouseUp}
-        >
-          <div className="flex items-center gap-2">
-            {card.priority && card.priority !== "none" && (
-              <span
-                className="h-2.5 w-2.5 flex-shrink-0 rounded-full"
-                style={{ backgroundColor: PRIORITY_COLORS[card.priority] }}
-                title={`${card.priority} priority`}
-              />
-            )}
-            <h4 className="font-display text-base font-semibold text-[var(--navy-dark)]">
-              {card.title}
-            </h4>
-          </div>
-          <p className="mt-2 text-sm leading-6 text-[var(--gray-text)]">
-            {card.details}
-          </p>
-          <div className="mt-2 flex flex-wrap items-center gap-3">
-            {card.dueDate && (
-              <span className="text-xs text-[var(--gray-text)]">
-                Due: {card.dueDate}
-              </span>
-            )}
-            {totalCount > 0 && (
-              <span className="text-xs font-semibold text-[var(--gray-text)]">
-                {doneCount}/{totalCount}
-              </span>
-            )}
-          </div>
-        </div>
+        {card.priority && card.priority !== "none" && (
+          <span
+            className="flex-shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold leading-none text-white"
+            style={{ backgroundColor: PRIORITY_COLORS[card.priority] }}
+          >
+            {PRIORITY_LABELS[card.priority]}
+          </span>
+        )}
 
-        {/* Delete */}
+        <h4 className="min-w-0 flex-1 truncate font-display text-sm font-semibold leading-tight text-[var(--navy-dark)]">
+          {card.title}
+        </h4>
+      </div>
+
+      {/* Description — compact, 2-line clamp */}
+      {card.details && (
+        <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-[var(--gray-text)]">
+          {card.details}
+        </p>
+      )}
+
+      {/* Bottom row: actions */}
+      <div className="mt-2 flex items-center justify-end gap-1 opacity-0 transition group-hover:opacity-100">
+        {onCardClick && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onCardClick(card.id);
+            }}
+            className="rounded-lg px-2 py-1 text-[10px] font-semibold text-[var(--primary-blue)] transition hover:bg-[var(--surface)]"
+          >
+            Edit
+          </button>
+        )}
         <button
           type="button"
           onClick={() => onDelete(card.id)}
-          className="flex-shrink-0 rounded-full border border-transparent px-2 py-1 text-xs font-semibold text-[var(--gray-text)] transition hover:border-[var(--stroke)] hover:text-[var(--navy-dark)]"
+          className="rounded-lg px-2 py-1 text-[10px] font-semibold text-[var(--gray-text)] transition hover:bg-[var(--surface)] hover:text-red-500"
           aria-label={`Delete ${card.title}`}
         >
-          Remove
+          Delete
         </button>
       </div>
     </article>

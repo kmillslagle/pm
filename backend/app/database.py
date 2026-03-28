@@ -19,10 +19,16 @@ def init_db() -> None:
             username TEXT UNIQUE NOT NULL,
             password TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            name TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS boards (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL REFERENCES users(id),
-            name TEXT NOT NULL DEFAULT 'My Board'
+            name TEXT NOT NULL DEFAULT 'My Board',
+            project_id INTEGER REFERENCES projects(id)
         );
         CREATE TABLE IF NOT EXISTS board_columns (
             id TEXT PRIMARY KEY,
@@ -70,11 +76,19 @@ def init_db() -> None:
     conn.commit()
 
     # Migrations — add columns if they don't exist
+    try:
+        conn.execute("ALTER TABLE boards ADD COLUMN project_id INTEGER REFERENCES projects(id)")
+    except Exception:
+        pass
+
     for col_def in [
         ("priority", "TEXT NOT NULL DEFAULT 'none'"),
         ("notes", "TEXT NOT NULL DEFAULT ''"),
         ("due_date", "TEXT"),
         ("subtasks", "TEXT NOT NULL DEFAULT '[]'"),
+        ("dependencies", "TEXT NOT NULL DEFAULT '[]'"),
+        ("deliverable_type", "TEXT NOT NULL DEFAULT ''"),
+        ("key_references", "TEXT NOT NULL DEFAULT ''"),
     ]:
         try:
             conn.execute(f"ALTER TABLE cards ADD COLUMN {col_def[0]} {col_def[1]}")

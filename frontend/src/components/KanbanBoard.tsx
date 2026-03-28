@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -23,6 +23,10 @@ type KanbanBoardProps = {
   board: BoardData;
   onBoardChange: (board: BoardData) => void;
   onBoardCreated?: (boardId: number) => void;
+  workstreams?: api.BoardInfo[];
+  activeWorkstreamId?: number;
+  onWorkstreamSelect?: (boardId: number) => void;
+  onAddWorkstream?: () => void;
 };
 
 export const KanbanBoard = ({
@@ -31,6 +35,10 @@ export const KanbanBoard = ({
   board,
   onBoardChange,
   onBoardCreated,
+  workstreams,
+  activeWorkstreamId,
+  onWorkstreamSelect,
+  onAddWorkstream,
 }: KanbanBoardProps) => {
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
   const [selectedCard, setSelectedCard] = useState<Card | null>(null);
@@ -158,6 +166,9 @@ export const KanbanBoard = ({
       notes?: string;
       due_date?: string;
       subtasks?: api.Subtask[];
+      dependencies?: string[];
+      deliverable_type?: string;
+      key_references?: string;
     }
   ) => {
     try {
@@ -191,11 +202,11 @@ export const KanbanBoard = ({
       <div className="pointer-events-none absolute bottom-0 right-0 h-[520px] w-[520px] translate-x-1/4 translate-y-1/4 rounded-full bg-[radial-gradient(circle,_rgba(117,57,145,0.18)_0%,_rgba(117,57,145,0.05)_55%,_transparent_75%)]" />
 
       <main className="relative mx-auto flex min-h-screen max-w-[1500px] flex-col gap-10 px-6 pb-16 pt-12">
-        <header className="flex flex-col gap-6 rounded-[32px] border border-[var(--stroke)] bg-white/80 p-8 shadow-[var(--shadow)] backdrop-blur">
+        <header className="flex flex-col gap-5 rounded-[32px] border border-[var(--stroke)] bg-white/80 p-8 shadow-[var(--shadow)] backdrop-blur">
           <div className="flex flex-wrap items-start justify-between gap-6">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.35em] text-[var(--gray-text)]">
-                Single Board Kanban
+                {workstreams && workstreams.length > 0 ? "Project" : "Single Board Kanban"}
               </p>
               <h1 className="mt-3 font-display text-4xl font-semibold text-[var(--navy-dark)]">
                 {projectName}
@@ -210,21 +221,39 @@ export const KanbanBoard = ({
                 Focus
               </p>
               <p className="mt-2 text-lg font-semibold text-[var(--primary-blue)]">
-                One board. {columnCount} column{columnCount !== 1 ? "s" : ""}. Zero clutter.
+                {workstreams && workstreams.length > 0
+                  ? `${workstreams.length} workstream${workstreams.length !== 1 ? "s" : ""}`
+                  : `${columnCount} column${columnCount !== 1 ? "s" : ""}`}
               </p>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-4">
-            {board.columns.map((column) => (
-              <div
-                key={column.id}
-                className="flex items-center gap-2 rounded-full border border-[var(--stroke)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-[var(--navy-dark)]"
-              >
-                <span className="h-2 w-2 rounded-full bg-[var(--accent-yellow)]" />
-                {column.title}
-              </div>
-            ))}
-          </div>
+
+          {/* Workstream tabs */}
+          {workstreams && workstreams.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 border-t border-[var(--stroke)] pt-4">
+              {workstreams.map((ws) => (
+                <button
+                  key={ws.id}
+                  onClick={() => onWorkstreamSelect?.(ws.id)}
+                  className={`rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] transition ${
+                    activeWorkstreamId === ws.id
+                      ? "bg-[var(--primary-blue)] text-white shadow-sm"
+                      : "border border-[var(--stroke)] text-[var(--gray-text)] hover:border-[var(--primary-blue)] hover:text-[var(--primary-blue)]"
+                  }`}
+                >
+                  {ws.name}
+                </button>
+              ))}
+              {onAddWorkstream && (
+                <button
+                  onClick={onAddWorkstream}
+                  className="rounded-full border border-dashed border-[var(--stroke)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--primary-blue)] transition hover:border-[var(--primary-blue)]"
+                >
+                  + Add Workstream
+                </button>
+              )}
+            </div>
+          )}
         </header>
 
         <DndContext
@@ -241,7 +270,7 @@ export const KanbanBoard = ({
               <KanbanColumn
                 key={column.id}
                 column={column}
-                cards={column.cardIds.map((cardId) => board.cards[cardId])}
+                cards={column.cardIds.map((cardId) => board.cards[cardId]).filter(Boolean)}
                 onRename={handleRenameColumn}
                 onAddCard={handleAddCard}
                 onDeleteCard={handleDeleteCard}

@@ -143,18 +143,12 @@ export const ChatSidebar = ({
   };
 
   return (
-    <>
-      {isOpen && (
-        <div
-          className="fixed inset-0 z-40 bg-black/20 backdrop-blur-sm"
-          onClick={onClose}
-        />
-      )}
-      <aside
-        className={`fixed right-0 top-0 z-50 flex h-full w-full max-w-md flex-col border-l border-[var(--stroke)] bg-white shadow-[-8px_0_32px_rgba(3,33,71,0.12)] transition-transform duration-300 ${
-          isOpen ? "translate-x-0" : "translate-x-full"
-        }`}
-      >
+    <aside
+      className={`flex-shrink-0 flex flex-col overflow-hidden border-l border-[var(--stroke)] bg-white shadow-[-8px_0_32px_rgba(3,33,71,0.12)] transition-[width] duration-300 ${
+        isOpen ? "w-[448px]" : "w-0"
+      }`}
+    >
+      <div className="flex h-full min-w-[448px] flex-col">
         <div className="flex items-center justify-between border-b border-[var(--stroke)] px-6 py-4">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.25em] text-[var(--gray-text)]">
@@ -263,7 +257,7 @@ export const ChatSidebar = ({
             </button>
           </div>
         </form>
-      </aside>
-    </>
+      </div>
+    </aside>
   );
 };

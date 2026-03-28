@@ -47,21 +47,75 @@ export type Card = {
   notes?: string;
   dueDate?: string;
   subtasks?: Subtask[];
+  dependencies?: string[];
+  deliverableType?: string;
+  keyReferences?: string;
 };
 
 export type Column = { id: string; title: string; cardIds: string[] };
 export type BoardData = { columns: Column[]; cards: Record<string, Card> };
-export type BoardInfo = { id: number; name: string };
+export type BoardInfo = { id: number; name: string; project_id?: number | null };
+export type ProjectInfo = { id: number; name: string; workstream_count: number };
 
-export async function listBoards(): Promise<BoardInfo[]> {
-  return apiFetch("/api/boards");
+export type WorkstreamData = {
+  id: number;
+  name: string;
+  columns: Column[];
+  cards: Record<string, Card>;
+};
+
+export type ProjectBoardData = {
+  project_id: number;
+  project_name: string;
+  workstreams: WorkstreamData[];
+};
+
+export async function listProjects(): Promise<ProjectInfo[]> {
+  return apiFetch("/api/projects");
 }
 
-export async function createBoard(name: string, columns?: string[]): Promise<BoardInfo> {
-  return apiFetch("/api/boards", {
+export async function createProject(name: string): Promise<ProjectInfo> {
+  return apiFetch("/api/projects", { method: "POST", body: JSON.stringify({ name }) });
+}
+
+export async function deleteProject(projectId: number): Promise<void> {
+  await apiFetch(`/api/projects/${projectId}`, { method: "DELETE" });
+}
+
+export async function createWorkstream(
+  projectId: number,
+  name: string,
+  columns?: string[]
+): Promise<BoardInfo> {
+  return apiFetch(`/api/projects/${projectId}/workstreams`, {
     method: "POST",
     body: JSON.stringify({ name, ...(columns ? { columns } : {}) }),
   });
+}
+
+export async function getProjectBoard(projectId: number): Promise<ProjectBoardData> {
+  return apiFetch(`/api/projects/${projectId}/board`);
+}
+
+export async function createProjectBoard(
+  projectId: number,
+  workstreams: { name: string; columns: string[] }[]
+): Promise<ProjectBoardData> {
+  return apiFetch(`/api/projects/${projectId}/board`, {
+    method: "POST",
+    body: JSON.stringify({ workstreams }),
+  });
+}
+
+export async function addColumn(boardId: number, title: string): Promise<{ id: string; title: string; cardIds: string[] }> {
+  return apiFetch(`/api/boards/${boardId}/columns`, {
+    method: "POST",
+    body: JSON.stringify({ title }),
+  });
+}
+
+export async function listBoards(): Promise<BoardInfo[]> {
+  return apiFetch("/api/boards");
 }
 
 export async function getBoard(boardId: number): Promise<BoardData> {
@@ -102,6 +156,9 @@ export async function updateCard(
     notes?: string;
     due_date?: string;
     subtasks?: Subtask[];
+    dependencies?: string[];
+    deliverable_type?: string;
+    key_references?: string;
   }
 ): Promise<Card> {
   return apiFetch(`/api/cards/${cardId}`, {
@@ -145,9 +202,18 @@ export async function getChatHistory(boardId: number): Promise<ChatMessage[]> {
   return apiFetch(`/api/chat/history?board_id=${boardId}`);
 }
 
-export async function createBoardFromAI(payload: CreateBoardPayload): Promise<BoardInfo> {
+export async function createBoardFromAI(payload: CreateBoardPayload, projectId?: number): Promise<BoardInfo> {
   return apiFetch("/api/boards/from-ai", {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ ...payload, ...(projectId != null ? { project_id: projectId } : {}) }),
+  });
+}
+
+export type BuildMessage = { role: "user" | "assistant"; content: string };
+
+export async function aiBuildBoard(message: string, history: BuildMessage[]): Promise<ChatResponse> {
+  return apiFetch("/api/boards/ai-build", {
+    method: "POST",
+    body: JSON.stringify({ message, history }),
   });
 }
