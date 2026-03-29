@@ -53,7 +53,6 @@ export type Card = {
 };
 
 export type Column = { id: string; title: string; cardIds: string[] };
-export type BoardData = { columns: Column[]; cards: Record<string, Card> };
 export type BoardInfo = { id: number; name: string; project_id?: number | null };
 export type ProjectInfo = { id: number; name: string; workstream_count: number };
 
@@ -112,10 +111,6 @@ export async function addColumn(boardId: number, title: string): Promise<{ id: s
     method: "POST",
     body: JSON.stringify({ title }),
   });
-}
-
-export async function getBoard(boardId: number): Promise<BoardData> {
-  return apiFetch(`/api/boards/${boardId}`);
 }
 
 export async function renameColumn(columnId: string, title: string): Promise<void> {
@@ -216,11 +211,17 @@ export async function createBoardFromAI(payload: CreateBoardPayload, projectId?:
   });
 }
 
-export type BuildMessage = { role: "user" | "assistant"; content: string };
-
-export async function aiBuildBoard(message: string, history: BuildMessage[]): Promise<ChatResponse> {
-  return apiFetch("/api/boards/ai-build", {
+export async function uploadPdf(file: File): Promise<{ text: string; filename: string; pages: number }> {
+  const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "";
+  const formData = new FormData();
+  formData.append("file", file);
+  const res = await fetch(`${API_BASE_URL}/api/upload/pdf`, {
     method: "POST",
-    body: JSON.stringify({ message, history }),
+    credentials: "include",
+    body: formData,
   });
+  if (!res.ok) {
+    throw new Error(`Upload failed: ${res.status}`);
+  }
+  return res.json();
 }

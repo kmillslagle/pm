@@ -8,7 +8,7 @@ A full-stack Kanban project management app — fully project-based (no standalon
 
 ## Self-Maintenance Rule
 
-After every major change (new model, new page, new controller, route changes, migration changes, new test files, architectural shifts), update this CLAUDE.md file to reflect the current state. Specifically:
+After every major change (new model, new page, new controller, route changes, migration changes, new test files, architectural shifts), update this CLAUDE.md file to reflect the current state. Update the Architecture, API endpoints, component tree, and any other sections affected by the change.
 
 ## Development Commands
 
@@ -42,8 +42,8 @@ scripts/stop.bat     # Windows: stop
 
 Run a single test file:
 ```bash
-npx vitest run src/components/KanbanBoard.test.tsx   # frontend
-uv run pytest tests/test_api.py::TestBoards -v       # backend
+npx vitest run src/components/ProjectBoard.test.tsx   # frontend
+uv run pytest tests/test_api.py::TestBoards -v        # backend
 ```
 
 ## Architecture
@@ -101,13 +101,16 @@ Each card contains:
 - `getProjectBoard(projectId)` — fetches all workstreams with columns and cards in one call
 - `createProjectBoard(projectId, workstreams)` — batch-creates multiple workstreams with columns
 - `addColumn(boardId, title)` — adds a column to an existing board/workstream
+- `sendProjectChat(projectId, message)` — project-scoped AI chat
+- `getProjectChatHistory(projectId)` — project chat history
+- `uploadPdf(file)` — extracts text from a PDF file via backend
 - Auth functions (`login`, `register`, `logout`, `getMe`) handle session cookies
 
 **Component tree**:
 ```
 page.tsx (auth check, project selector, layout)
   ├── LoginForm (sign in / create account toggle, inline errors)
-  ├── ProjectWizard (multi-step: project name → workstream names → columns per workstream → review)
+  ├── ProjectWizard (manual: project name → workstream names → columns → review; or AI chat: creates project and uses sendProjectChat API with plan-first flow)
   ├── ProjectBoard (tabbed single-workstream view for projects)
   │   ├── Header: project name, workstream tabs, + Add Workstream, stats
   │   └── Active workstream:
@@ -120,16 +123,17 @@ page.tsx (auth check, project selector, layout)
       ├── Plan display with Approve/Revise buttons
       ├── Workstream progress indicator
       ├── Quick actions: Assess quality, Add workstream, Help
+      ├── PDF upload button (extracts text via /api/upload/pdf, sends as chat message)
       └── Auto-growing textarea for long prompts
 ```
 
-**ProjectBoard**: Shows one workstream at a time, selected via tabs in the header. Each tab shows the workstream name and card count. The active workstream's columns render below with a single `DndContext`. `KanbanBoard` is used only for standalone boards not associated with a project.
+**ProjectBoard**: Shows one workstream at a time, selected via tabs in the header. Each tab shows the workstream name and card count. The active workstream's columns render below with a single `DndContext`.
 
 **Inline editing in ProjectBoard**: Users can add workstreams (inline input next to tabs, creates with 3 default columns) and add columns to the active workstream (inline form via "+ Column" button in workstream sub-header) without leaving the board view.
 
 **Drag-and-drop**: Uses dnd-kit with `closestCorners` collision detection. `moveCard()` in `lib/kanban.ts` handles both intra-column reordering and inter-column moves.
 
-**State**: Auth state and project list live in `page.tsx`. Project board state (`ProjectBoardData`) is loaded via `getProjectBoard()` and passed to `ProjectBoard`. The sample project is loaded from the frontend constant (no API call). Standalone board state lives in `KanbanBoard`. All real project data is persisted to the backend; localStorage is not used.
+**State**: Auth state and project list live in `page.tsx`. Project board state (`ProjectBoardData`) is loaded via `getProjectBoard()` and passed to `ProjectBoard`. The sample project is loaded from the frontend constant (no API call). All real project data is persisted to the backend; localStorage is not used.
 
 ### Backend (`backend/`)
 
@@ -140,7 +144,7 @@ Python FastAPI app serving the API and the static Next.js build.
 - `app/auth.py` — Auth routes (login, register, logout, me); salted/hashed passwords; DB-backed session tokens in httponly cookies
 - `app/board.py` — Board/project CRUD, column/card operations; card fields include priority, notes, due_date, subtasks, dependencies, deliverable_type, key_references
 - `app/ai.py` — Project-scoped AI chat using Claude API. Supports 7 action types (create_workstream, add_column, rename_column, create_card, update_card, move_card, delete_card) with all card fields. Plan-first workflow for complex changes. Skills: Board Builder, Board Quality Assessment, Card Enrichment, Workstream Management.
-- `app/database.py` — SQLite schema init, connection helper; sessions stored in DB; migrations add new card columns via ALTER TABLE
+- `app/database.py` — SQLite schema init, connection helper with `busy_timeout=5000` to prevent lock errors; sessions stored in DB; migrations add new card/chat columns via ALTER TABLE
 
 **Key API endpoints**:
 - `GET /api/projects/{id}/board` — Returns all workstreams with their columns and cards in one response
@@ -150,13 +154,20 @@ Python FastAPI app serving the API and the static Next.js build.
 - `POST /api/boards/{id}/columns` — Adds a new column to an existing board/workstream
 - `POST /api/chat/project?project_id={id}` — Project-scoped AI chat (replaces old board-scoped `/api/chat`)
 - `GET /api/chat/project/history?project_id={id}` — Project chat history
+- `POST /api/upload/pdf` — Extracts text from an uploaded PDF (uses PyMuPDF, 10MB limit)
 - Standard card CRUD: `POST /api/columns/{id}/cards`, `PUT /api/cards/{id}`, `DELETE /api/cards/{id}`, `PUT /api/cards/{id}/move`
 
 **Auth**: Passwords are salted and hashed (SHA-256). Sessions are stored in a `sessions` DB table (not in-memory) so they survive container restarts. Session tokens travel as httponly cookies.
 
 **Multi-project**: Each user can have multiple projects. Each project has multiple workstreams. All card/column operations verify ownership through the user→board→column→card chain.
 
-**AI Chat System**: Project-scoped via `POST /api/chat/project`. The AI receives full project state (all workstreams, columns, cards) and can execute 7 action types: `create_workstream`, `add_column`, `rename_column`, `create_card` (all 9 fields), `update_card`, `move_card`, `delete_card`. Uses a plan-first workflow — for complex changes, the AI presents a plan for approval, then executes workstream-by-workstream. Chat history stored in `chat_messages` table with `project_id`. Skills: Board Builder, Board Quality Assessment, Card Enrichment, Workstream Management.
+**AI Chat System**: Project-scoped via `POST /api/chat/project`. The AI receives full project state (all workstreams, columns, cards) and can execute 7 action types: `create_workstream`, `add_column`, `rename_column`, `create_card` (all 9 fields), `update_card`, `move_card`, `delete_card`. Uses a plan-first workflow — for complex changes, the AI presents a plan for approval, then executes workstream-by-workstream. Chat history stored in `chat_messages` table with `project_id` (FK constraints temporarily disabled for empty projects with no boards yet). Skills: Board Builder, Board Quality Assessment, Card Enrichment, Workstream Management.
+
+**AI column resolution**: When creating cards in newly created workstreams (same batch), the AI uses `workstream_name` + `column_title` instead of `column_id`. The backend resolves these to real IDs by looking up the workstream by name and column by title. For existing workstreams, the AI uses real `column_id` values from the project state JSON.
+
+**ProjectWizard AI chat**: The wizard's "Build with AI Chat" mode creates a blank project on the first message, then uses `sendProjectChat()` for all subsequent turns. The AI has full plan-first capability. Includes a PDF upload button for importing project descriptions from documents. An "Open Project" button appears once the project is created so the user can jump to the project board at any time.
+
+**PDF upload**: Both ChatSidebar and ProjectWizard AI chat support PDF file upload. The file is sent to `POST /api/upload/pdf` which uses PyMuPDF to extract text. The extracted text is then sent as a chat message with instructions for the AI to build a project from it. Dependencies: `pymupdf` and `python-multipart` in `pyproject.toml`.
 
 ## Design Tokens
 

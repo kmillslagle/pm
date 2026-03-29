@@ -78,9 +78,11 @@ export const ChatSidebar = ({
   const [loading, setLoading] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [hasPendingPlan, setHasPendingPlan] = useState(false);
+  const [uploadingFile, setUploadingFile] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const loadedProjectRef = useRef<number | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Load chat history when sidebar opens
   useEffect(() => {
@@ -161,6 +163,28 @@ export const ChatSidebar = ({
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       sendMessage(input);
+    }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    // Reset input so same file can be uploaded again
+    e.target.value = "";
+
+    setUploadingFile(true);
+    try {
+      const result = await api.uploadPdf(file);
+      const fileMsg = `I've uploaded a document: **${result.filename}** (${result.pages} pages). Here is the full content:\n\n${result.text}\n\nPlease read this document and build a complete project based on it. Present your plan first, organized by workstream.`;
+      await sendMessage(fileMsg);
+    } catch {
+      const errorMsg: ChatMessage = {
+        role: "assistant",
+        content: "Failed to read the uploaded file. Please make sure it's a valid PDF.",
+      };
+      setMessages((prev) => [...prev, errorMsg]);
+    } finally {
+      setUploadingFile(false);
     }
   };
 
@@ -296,11 +320,45 @@ export const ChatSidebar = ({
           </div>
         </div>
 
+        {/* Uploading indicator */}
+        {uploadingFile && (
+          <div className="border-t border-[var(--stroke)] px-6 py-2">
+            <p className="text-xs text-[var(--primary-blue)] flex items-center gap-2">
+              <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-[var(--primary-blue)]" />
+              Reading PDF...
+            </p>
+          </div>
+        )}
+
         <form
           onSubmit={handleSubmit}
           className="border-t border-[var(--stroke)] px-6 py-4"
         >
-          <div className="flex gap-3">
+          {/* Hidden file input */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".pdf"
+            onChange={handleFileUpload}
+            className="hidden"
+          />
+
+          <div className="flex gap-2">
+            {/* Upload button */}
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={loading || uploadingFile}
+              className="self-end flex-shrink-0 rounded-xl border border-[var(--stroke)] p-3 text-[var(--gray-text)] transition hover:border-[var(--primary-blue)] hover:text-[var(--primary-blue)] disabled:opacity-50"
+              title="Upload PDF"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M14 10v3a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1v-3" />
+                <polyline points="8 2 8 10" />
+                <polyline points="5 5 8 2 11 5" />
+              </svg>
+            </button>
+
             <textarea
               ref={textareaRef}
               value={input}
@@ -310,11 +368,11 @@ export const ChatSidebar = ({
               rows={1}
               className="flex-1 resize-none rounded-xl border border-[var(--stroke)] bg-white px-4 py-3 text-sm text-[var(--navy-dark)] outline-none transition focus:border-[var(--primary-blue)]"
               style={{ maxHeight: "160px" }}
-              disabled={loading}
+              disabled={loading || uploadingFile}
             />
             <button
               type="submit"
-              disabled={loading || !input.trim()}
+              disabled={loading || uploadingFile || !input.trim()}
               className="self-end rounded-full bg-[var(--secondary-purple)] px-5 py-3 text-xs font-semibold uppercase tracking-wide text-white transition hover:brightness-110 disabled:opacity-50"
             >
               Send

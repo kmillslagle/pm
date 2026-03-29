@@ -431,21 +431,6 @@ def get_board(board_id: int, request: Request) -> BoardResponse:
     return BoardResponse(columns=columns, cards=cards)
 
 
-# Keep the old endpoint for backwards compatibility during transition
-@router.get("/board")
-def get_board_legacy(request: Request) -> BoardResponse:
-    username = get_current_user(request)
-    conn = get_connection()
-    row = conn.execute(
-        "SELECT b.id FROM boards b JOIN users u ON b.user_id = u.id WHERE u.username = ?",
-        (username,),
-    ).fetchone()
-    conn.close()
-    if not row:
-        raise HTTPException(status_code=404, detail="Board not found")
-    return get_board(row["id"], request)
-
-
 class ColumnCreate(BaseModel):
     title: str
 

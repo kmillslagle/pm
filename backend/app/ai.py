@@ -3,7 +3,7 @@ import os
 import re
 import secrets
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel
 
 from app.auth import get_current_user
@@ -50,11 +50,6 @@ class ChatResponse(BaseModel):
     create_board: dict | None = None
     plan: str | None = None
     plan_workstream: str | None = None
-
-
-class BuildRequest(BaseModel):
-    message: str
-    history: list[dict] = []
 
 
 # ---------------------------------------------------------------------------
@@ -508,51 +503,30 @@ def project_chat_history(request: Request, project_id: int = Query(...)) -> list
     return _get_project_chat_history(project_id, limit=50)
 
 
-# Keep legacy board-scoped endpoints for backward compat (not used by frontend)
-@router.post("/chat")
-def chat(body: ChatRequest, request: Request, board_id: int = Query(...)) -> ChatResponse:
-    username = get_current_user(request)
-    from app.board import _verify_board_owner
-    _verify_board_owner(board_id, username)
-    return ChatResponse(reply="This endpoint is deprecated. Use /api/chat/project instead.")
-
-
-@router.get("/chat/history")
-def chat_history(request: Request, board_id: int = Query(...)) -> list[dict]:
-    username = get_current_user(request)
-    from app.board import _verify_board_owner
-    _verify_board_owner(board_id, username)
-    return []
-
-
-@router.post("/boards/ai-build")
-def ai_build(body: BuildRequest, request: Request) -> ChatResponse:
-    """Stateless AI board builder — client manages conversation history."""
+@router.post("/upload/pdf")
+async def upload_pdf(request: Request, file: UploadFile = File(...)) -> dict:
+    """Extract text from an uploaded PDF file."""
     get_current_user(request)
 
-    messages = [
-        {"role": "user", "content": "Current project state:\n{}"},
-        {"role": "assistant", "content": "I'm ready to help you design a new Kanban board. Describe your project and I'll build it for you."},
-    ]
-    messages.extend(body.history)
-    messages.append({"role": "user", "content": body.message})
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
 
-    if not ANTHROPIC_API_KEY:
-        return ChatResponse(reply="AI is not configured. Set ANTHROPIC_API_KEY in your .env file.")
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:  # 10MB limit
+        raise HTTPException(status_code=400, detail="File too large (max 10MB)")
 
-    import anthropic
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=16384,
-        system=SYSTEM_PROMPT,
-        messages=messages,
-    )
+    try:
+        import fitz  # pymupdf
+        doc = fitz.open(stream=content, filetype="pdf")
+        text_parts = []
+        for page in doc:
+            text_parts.append(page.get_text())
+        doc.close()
+        text = "\n\n".join(text_parts).strip()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not read PDF: {str(e)}")
 
-    raw = response.content[0].text if response.content else "{}"
-    parsed = _parse_ai_response(raw)
+    if not text:
+        raise HTTPException(status_code=400, detail="PDF appears to be empty or image-only")
 
-    reply = parsed.get("reply", "I could not generate a response.")
-    create_board_data = parsed.get("create_board", None)
-
-    return ChatResponse(reply=reply, board_updates=[], create_board=create_board_data)
+    return {"text": text, "filename": file.filename, "pages": len(text_parts)}
