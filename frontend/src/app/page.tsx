@@ -1,13 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { KanbanBoard } from "@/components/KanbanBoard";
 import { ProjectBoard } from "@/components/ProjectBoard";
 import { ChatSidebar } from "@/components/ChatSidebar";
 import { ProjectWizard } from "@/components/ProjectWizard";
 import { LoginForm } from "@/components/LoginForm";
 import * as api from "@/lib/api";
-import type { BoardData, ProjectBoardData } from "@/lib/kanban";
+import type { ProjectBoardData } from "@/lib/kanban";
 import { SAMPLE_PROJECT, SAMPLE_PROJECT_ID } from "@/lib/sampleProject";
 
 export default function Home() {
@@ -17,15 +16,10 @@ export default function Home() {
 
   // Data
   const [projects, setProjects] = useState<api.ProjectInfo[]>([]);
-  const [standaloneBoards, setStandaloneBoards] = useState<api.BoardInfo[]>([]);
 
-  // Active context — project view
+  // Active context
   const [activeProjectId, setActiveProjectId] = useState<number | null>(null);
   const [projectBoard, setProjectBoard] = useState<ProjectBoardData | null>(null);
-
-  // Active context — standalone board view
-  const [activeBoardId, setActiveBoardId] = useState<number | null>(null);
-  const [board, setBoard] = useState<BoardData | null>(null);
 
   // UI
   const [chatOpen, setChatOpen] = useState(false);
@@ -33,14 +27,10 @@ export default function Home() {
   const [showProjectList, setShowProjectList] = useState(false);
   const [homeView, setHomeView] = useState<"home" | "open" | "new">("home");
 
-  // Load all top-level data
+  // Load projects
   const loadData = useCallback(async () => {
-    const [projectList, boardList] = await Promise.all([
-      api.listProjects(),
-      api.listBoards(),
-    ]);
+    const projectList = await api.listProjects();
     setProjects(projectList);
-    setStandaloneBoards(boardList);
   }, []);
 
   // Auth check on mount
@@ -58,15 +48,6 @@ export default function Home() {
       });
   }, [loadData]);
 
-  // Load standalone board data when activeBoardId changes
-  useEffect(() => {
-    if (activeBoardId == null) {
-      setBoard(null);
-      return;
-    }
-    api.getBoard(activeBoardId).then(setBoard).catch(() => setBoard(null));
-  }, [activeBoardId]);
-
   // --- Auth handlers ---
 
   const handleLogin = useCallback(async (user: string) => {
@@ -78,11 +59,8 @@ export default function Home() {
     await api.logout();
     setUsername(null);
     setProjects([]);
-    setStandaloneBoards([]);
     setActiveProjectId(null);
     setProjectBoard(null);
-    setActiveBoardId(null);
-    setBoard(null);
   }, []);
 
   // --- Navigation ---
@@ -91,11 +69,9 @@ export default function Home() {
 
   const handleSelectProject = useCallback(async (projectId: number) => {
     setActiveProjectId(projectId);
-    setActiveBoardId(null);
-    setBoard(null);
     setShowProjectList(false);
+    setChatOpen(false);
     if (projectId === SAMPLE_PROJECT_ID) {
-      // Deep-clone so mutations don't affect the constant
       setProjectBoard(JSON.parse(JSON.stringify(SAMPLE_PROJECT)));
       return;
     }
@@ -107,20 +83,23 @@ export default function Home() {
     }
   }, []);
 
-  const handleSelectStandaloneBoard = useCallback((boardId: number) => {
-    setActiveProjectId(null);
-    setProjectBoard(null);
-    setActiveBoardId(boardId);
-    setShowProjectList(false);
-  }, []);
-
   const handleBackToProjects = useCallback(() => {
     setActiveProjectId(null);
     setProjectBoard(null);
-    setActiveBoardId(null);
-    setBoard(null);
+    setChatOpen(false);
     setHomeView("home");
   }, []);
+
+  // Refresh project board (called by ChatSidebar after AI makes changes)
+  const handleProjectRefresh = useCallback(async () => {
+    if (activeProjectId == null || isSampleProject) return;
+    try {
+      const pb = await api.getProjectBoard(activeProjectId);
+      setProjectBoard(pb);
+    } catch {
+      // ignore
+    }
+  }, [activeProjectId, isSampleProject]);
 
   // --- Wizard callbacks ---
 
@@ -128,8 +107,6 @@ export default function Home() {
     setShowWizard(false);
     await loadData();
     setActiveProjectId(info.projectId);
-    setActiveBoardId(null);
-    setBoard(null);
     try {
       const pb = await api.getProjectBoard(info.projectId);
       setProjectBoard(pb);
@@ -137,20 +114,6 @@ export default function Home() {
       setProjectBoard(null);
     }
   }, [loadData]);
-
-  // Called when AI chat creates a new board (standalone)
-  const handleAIBoardCreated = useCallback(async (boardId: number) => {
-    await loadData();
-    setActiveProjectId(null);
-    setProjectBoard(null);
-    setActiveBoardId(boardId);
-  }, [loadData]);
-
-  const handleBoardRefresh = useCallback(async () => {
-    if (activeBoardId == null) return;
-    const refreshed = await api.getBoard(activeBoardId);
-    setBoard(refreshed);
-  }, [activeBoardId]);
 
   // --- Render helpers ---
 
@@ -161,9 +124,6 @@ export default function Home() {
   };
   const allProjects = [sampleProjectInfo, ...projects];
 
-  const activeProject = allProjects.find((p) => p.id === activeProjectId) ?? null;
-  const activeStandaloneBoard = standaloneBoards.find((b) => b.id === activeBoardId) ?? null;
-
   // --- Render ---
 
   if (!ready) return null;
@@ -172,8 +132,8 @@ export default function Home() {
     return <LoginForm onLogin={handleLogin} />;
   }
 
-  // Welcome screen — no active board/project
-  if (!activeBoardId && !activeProjectId) {
+  // Welcome screen — no active project
+  if (!activeProjectId) {
     return (
       <>
         <div className="relative min-h-screen overflow-hidden">
@@ -190,7 +150,6 @@ export default function Home() {
           </div>
 
           <main className="relative mx-auto flex min-h-screen max-w-[640px] flex-col items-center justify-center gap-10 px-6 py-16">
-            {/* Logo / title */}
             <div className="text-center">
               <p className="text-xs font-semibold uppercase tracking-[0.35em] text-[var(--gray-text)]">
                 Project Management
@@ -204,7 +163,6 @@ export default function Home() {
               </p>
             </div>
 
-            {/* Home: two choices */}
             {homeView === "home" && (
               <div className="w-full space-y-3">
                 <button
@@ -231,9 +189,7 @@ export default function Home() {
                 </button>
 
                 <button
-                  onClick={() => {
-                    setShowWizard(true);
-                  }}
+                  onClick={() => setShowWizard(true)}
                   className="flex w-full items-center gap-5 rounded-2xl border border-[var(--stroke)] bg-white p-6 shadow-[0_4px_12px_rgba(3,33,71,0.06)] text-left transition hover:shadow-[var(--shadow)] hover:border-[var(--secondary-purple)]"
                 >
                   <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[rgba(117,57,145,0.1)]">
@@ -256,7 +212,6 @@ export default function Home() {
               </div>
             )}
 
-            {/* Open: project list */}
             {homeView === "open" && (
               <div className="w-full space-y-4">
                 <div className="flex items-center justify-between">
@@ -275,9 +230,6 @@ export default function Home() {
                   <div className="rounded-2xl border border-dashed border-[var(--stroke)] bg-white p-10 text-center">
                     <p className="text-sm font-medium text-[var(--gray-text)]">
                       No existing projects yet.
-                    </p>
-                    <p className="mt-1 text-xs text-[var(--gray-text)]">
-                      Go back and start a new project to get going.
                     </p>
                     <button
                       onClick={() => setShowWizard(true)}
@@ -325,12 +277,20 @@ export default function Home() {
     );
   }
 
-  // Project view — project selected, show unified board
+  // Project view — project selected
   if (activeProjectId && projectBoard) {
     return (
       <>
         {/* Fixed top-right controls */}
         <div className="fixed right-6 top-4 z-30 flex items-center gap-3">
+          {!isSampleProject && (
+            <button
+              onClick={() => setChatOpen(true)}
+              className="rounded-full bg-[var(--primary-blue)] px-4 py-2 text-xs font-semibold uppercase tracking-wide text-white transition hover:brightness-110"
+            >
+              AI Chat
+            </button>
+          )}
           <button
             onClick={() => setShowProjectList(!showProjectList)}
             className="rounded-full border border-[var(--stroke)] bg-white px-4 py-2 text-xs font-semibold uppercase tracking-wide text-[var(--gray-text)] transition hover:text-[var(--navy-dark)]"
@@ -389,13 +349,24 @@ export default function Home() {
         )}
 
         <div className="flex h-screen flex-col overflow-hidden">
-          <div className="flex-1 overflow-auto min-w-0">
-            <ProjectBoard
-              projectId={activeProjectId}
-              projectBoard={projectBoard}
-              onProjectBoardChange={setProjectBoard}
-              isSample={isSampleProject}
-            />
+          <div className="flex flex-1 min-h-0 overflow-hidden">
+            <div className="flex-1 overflow-auto min-w-0">
+              <ProjectBoard
+                projectId={activeProjectId}
+                projectBoard={projectBoard}
+                onProjectBoardChange={setProjectBoard}
+                isSample={isSampleProject}
+              />
+            </div>
+
+            {!isSampleProject && (
+              <ChatSidebar
+                isOpen={chatOpen}
+                onClose={() => setChatOpen(false)}
+                projectId={activeProjectId}
+                onProjectRefresh={handleProjectRefresh}
+              />
+            )}
           </div>
         </div>
 
@@ -410,7 +381,7 @@ export default function Home() {
     );
   }
 
-  // Project selected but loading or empty
+  // Project selected but loading
   if (activeProjectId && !projectBoard) {
     return (
       <>
@@ -435,132 +406,6 @@ export default function Home() {
     );
   }
 
-  // Standalone board view
-  const boardName = activeStandaloneBoard?.name ?? "";
-
-  return (
-    <>
-      <div className="fixed right-6 top-4 z-30 flex items-center gap-3">
-        {activeBoardId && (
-          <button
-            onClick={() => setChatOpen(true)}
-            className="rounded-full bg-[var(--primary-blue)] px-4 py-2 text-xs font-semibold uppercase tracking-wide text-white transition hover:brightness-110"
-          >
-            AI Chat
-          </button>
-        )}
-        <button
-          onClick={() => setShowProjectList(!showProjectList)}
-          className="rounded-full border border-[var(--stroke)] bg-white px-4 py-2 text-xs font-semibold uppercase tracking-wide text-[var(--gray-text)] transition hover:text-[var(--navy-dark)]"
-        >
-          Projects
-        </button>
-        <button
-          onClick={handleLogout}
-          className="rounded-full border border-[var(--stroke)] bg-white px-4 py-2 text-xs font-semibold uppercase tracking-wide text-[var(--gray-text)] transition hover:text-[var(--navy-dark)]"
-        >
-          Sign out
-        </button>
-      </div>
-
-      {showProjectList && (
-        <div className="fixed left-6 top-4 z-30 w-80 rounded-2xl border border-[var(--stroke)] bg-white p-4 shadow-[var(--shadow)]">
-          <div className="mb-3 flex items-center justify-between">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--gray-text)]">
-              Projects &amp; Boards
-            </p>
-            <button
-              onClick={() => setShowProjectList(false)}
-              className="text-xs font-semibold text-[var(--gray-text)] hover:text-[var(--navy-dark)]"
-            >
-              Close
-            </button>
-          </div>
-
-          {allProjects.length > 0 && (
-            <div className="mb-3">
-              <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--gray-text)]">
-                Projects
-              </p>
-              <div className="space-y-1">
-                {allProjects.map((p) => (
-                  <button
-                    key={p.id}
-                    onClick={() => handleSelectProject(p.id)}
-                    className="w-full rounded-xl px-3 py-2 text-left text-sm text-[var(--navy-dark)] transition hover:bg-[var(--surface)]"
-                  >
-                    {p.name}
-                    <span className="ml-2 text-[10px] text-[var(--gray-text)]">
-                      {p.workstream_count}ws
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {standaloneBoards.length > 0 && (
-            <div className="mb-3">
-              <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--gray-text)]">
-                Boards
-              </p>
-              <div className="space-y-1">
-                {standaloneBoards.map((b) => (
-                  <button
-                    key={b.id}
-                    onClick={() => handleSelectStandaloneBoard(b.id)}
-                    className={`w-full rounded-xl px-3 py-2 text-left text-sm transition ${
-                      b.id === activeBoardId
-                        ? "bg-[var(--primary-blue)]/10 font-semibold text-[var(--primary-blue)]"
-                        : "text-[var(--navy-dark)] hover:bg-[var(--surface)]"
-                    }`}
-                  >
-                    {b.name}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div className="pt-1 border-t border-[var(--stroke)]">
-            <button
-              onClick={() => { setShowProjectList(false); handleBackToProjects(); }}
-              className="w-full rounded-full border border-dashed border-[var(--stroke)] px-3 py-2 text-xs font-semibold uppercase tracking-wide text-[var(--secondary-purple)] transition hover:border-[var(--secondary-purple)]"
-            >
-              + New Project
-            </button>
-          </div>
-        </div>
-      )}
-
-      <div className="flex h-screen flex-col overflow-hidden">
-        <div className="flex flex-1 min-h-0 overflow-hidden">
-          <div className="flex-1 overflow-auto min-w-0">
-            {activeBoardId && board ? (
-              <KanbanBoard
-                boardId={activeBoardId}
-                projectName={boardName}
-                board={board}
-                onBoardChange={setBoard}
-                onBoardCreated={handleAIBoardCreated}
-              />
-            ) : activeBoardId && !board ? (
-              <div className="flex h-full items-center justify-center text-sm text-[var(--gray-text)]">
-                Loading...
-              </div>
-            ) : null}
-          </div>
-
-          <ChatSidebar
-            isOpen={chatOpen}
-            onClose={() => setChatOpen(false)}
-            boardId={activeBoardId ?? 0}
-            board={board}
-            onBoardRefresh={handleBoardRefresh}
-            onBoardCreated={handleAIBoardCreated}
-          />
-        </div>
-      </div>
-    </>
-  );
+  // Fallback — should not reach here, redirect to home
+  return null;
 }

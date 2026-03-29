@@ -114,10 +114,6 @@ export async function addColumn(boardId: number, title: string): Promise<{ id: s
   });
 }
 
-export async function listBoards(): Promise<BoardInfo[]> {
-  return apiFetch("/api/boards");
-}
-
 export async function getBoard(boardId: number): Promise<BoardData> {
   return apiFetch(`/api/boards/${boardId}`);
 }
@@ -171,13 +167,22 @@ export type ChatMessage = { role: "user" | "assistant"; content: string };
 
 export type BoardUpdate = {
   action: string;
+  workstream_name?: string;
+  workstream_id?: number;
+  columns?: string[];
   card_id?: string;
   column_id?: string;
+  column_title?: string;
   title?: string;
   details?: string;
   position?: number;
   priority?: string;
   notes?: string;
+  due_date?: string;
+  subtasks?: string;
+  dependencies?: string;
+  deliverable_type?: string;
+  key_references?: string;
 };
 
 export type CreateBoardPayload = {
@@ -189,17 +194,19 @@ export type ChatResponse = {
   reply: string;
   board_updates: BoardUpdate[];
   create_board?: CreateBoardPayload;
+  plan?: string;
+  plan_workstream?: string;
 };
 
-export async function sendChatMessage(boardId: number, message: string): Promise<ChatResponse> {
-  return apiFetch(`/api/chat?board_id=${boardId}`, {
+export async function sendProjectChat(projectId: number, message: string): Promise<ChatResponse> {
+  return apiFetch(`/api/chat/project?project_id=${projectId}`, {
     method: "POST",
     body: JSON.stringify({ message }),
   });
 }
 
-export async function getChatHistory(boardId: number): Promise<ChatMessage[]> {
-  return apiFetch(`/api/chat/history?board_id=${boardId}`);
+export async function getProjectChatHistory(projectId: number): Promise<ChatMessage[]> {
+  return apiFetch(`/api/chat/project/history?project_id=${projectId}`);
 }
 
 export async function createBoardFromAI(payload: CreateBoardPayload, projectId?: number): Promise<BoardInfo> {

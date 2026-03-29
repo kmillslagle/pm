@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A full-stack Kanban project management app with multi-project support, user accounts, compact cards with rich metadata, and AI chat. The AI can manage individual cards or build entire boards from a natural-language prompt. Includes a built-in sample project for onboarding. Built with Next.js frontend, Python FastAPI backend, SQLite database, and the Claude API. Runs in Docker.
+A full-stack Kanban project management app — fully project-based (no standalone boards). Features user accounts, compact cards with rich metadata, and a project-scoped AI chat assistant that can manage workstreams, columns, and cards with a plan-first workflow. Includes a built-in sample project for onboarding. Built with Next.js frontend, Python FastAPI backend, SQLite database, and the Claude API. Runs in Docker.
 
 ## Self-Maintenance Rule
 
@@ -61,7 +61,7 @@ A **project** is the top-level container. Each project has one or more **workstr
 
 The project board header shows the project name, stats, and **workstream tabs**. Users select a tab to view one workstream at a time. The active workstream's columns and cards are displayed below. Users can add workstreams and columns inline from the header without leaving the board.
 
-Standalone boards (no project) are also supported for simple use cases.
+The app is fully project-based — there are no standalone boards. Every board lives inside a project.
 
 ### Sample Project
 
@@ -115,13 +115,12 @@ page.tsx (auth check, project selector, layout)
   │           ├── KanbanColumn[] → KanbanCard[] (useSortable)
   │           │                 └── NewCardForm
   │           └── DragOverlay → KanbanCardPreview
-  ├── KanbanBoard (used for standalone boards only)
-  │   └── DndContext (dnd-kit)
-  │       ├── KanbanColumn[] → KanbanCard[] (useSortable)
-  │       └── DragOverlay → KanbanCardPreview
   ├── CardDetailModal (full edit view: all card fields)
-  └── ChatSidebar (AI chat, calls backend /api/chat, scoped per boardId)
-      └── Board Builder mode (multi-turn prompt → full board generation)
+  └── ChatSidebar (project-scoped AI chat, calls /api/chat/project)
+      ├── Plan display with Approve/Revise buttons
+      ├── Workstream progress indicator
+      ├── Quick actions: Assess quality, Add workstream, Help
+      └── Auto-growing textarea for long prompts
 ```
 
 **ProjectBoard**: Shows one workstream at a time, selected via tabs in the header. Each tab shows the workstream name and card count. The active workstream's columns render below with a single `DndContext`. `KanbanBoard` is used only for standalone boards not associated with a project.
@@ -140,7 +139,7 @@ Python FastAPI app serving the API and the static Next.js build.
 - `app/main.py` — FastAPI entry point, mounts routers, serves static files
 - `app/auth.py` — Auth routes (login, register, logout, me); salted/hashed passwords; DB-backed session tokens in httponly cookies
 - `app/board.py` — Board/project CRUD, column/card operations; card fields include priority, notes, due_date, subtasks, dependencies, deliverable_type, key_references
-- `app/ai.py` — AI chat using Claude API with structured JSON outputs scoped per board; supports card-level actions and `create_board` action for building full boards from prompts
+- `app/ai.py` — Project-scoped AI chat using Claude API. Supports 7 action types (create_workstream, add_column, rename_column, create_card, update_card, move_card, delete_card) with all card fields. Plan-first workflow for complex changes. Skills: Board Builder, Board Quality Assessment, Card Enrichment, Workstream Management.
 - `app/database.py` — SQLite schema init, connection helper; sessions stored in DB; migrations add new card columns via ALTER TABLE
 
 **Key API endpoints**:
@@ -149,13 +148,15 @@ Python FastAPI app serving the API and the static Next.js build.
 - `GET /api/projects/{id}/workstreams` — Lists workstreams in a project
 - `POST /api/projects/{id}/workstreams` — Creates a single workstream
 - `POST /api/boards/{id}/columns` — Adds a new column to an existing board/workstream
+- `POST /api/chat/project?project_id={id}` — Project-scoped AI chat (replaces old board-scoped `/api/chat`)
+- `GET /api/chat/project/history?project_id={id}` — Project chat history
 - Standard card CRUD: `POST /api/columns/{id}/cards`, `PUT /api/cards/{id}`, `DELETE /api/cards/{id}`, `PUT /api/cards/{id}/move`
 
 **Auth**: Passwords are salted and hashed (SHA-256). Sessions are stored in a `sessions` DB table (not in-memory) so they survive container restarts. Session tokens travel as httponly cookies.
 
 **Multi-project**: Each user can have multiple projects. Each project has multiple workstreams. All card/column operations verify ownership through the user→board→column→card chain.
 
-**AI Board Builder**: The `/api/chat` endpoint supports a `create_board` structured output action. When the AI determines it has enough information (after asking clarifying questions), it returns a `create_board` action with full column and card definitions. The frontend calls `POST /api/boards/from-ai` to atomically create the board and then switches to it.
+**AI Chat System**: Project-scoped via `POST /api/chat/project`. The AI receives full project state (all workstreams, columns, cards) and can execute 7 action types: `create_workstream`, `add_column`, `rename_column`, `create_card` (all 9 fields), `update_card`, `move_card`, `delete_card`. Uses a plan-first workflow — for complex changes, the AI presents a plan for approval, then executes workstream-by-workstream. Chat history stored in `chat_messages` table with `project_id`. Skills: Board Builder, Board Quality Assessment, Card Enrichment, Workstream Management.
 
 ## Design Tokens
 

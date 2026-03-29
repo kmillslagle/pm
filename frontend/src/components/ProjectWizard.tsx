@@ -95,15 +95,45 @@ const AIBoardChat = ({ projectId, onComplete, onSwitchToManual }: AIChatProps) =
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [creating, setCreating] = useState(false);
+  const [projId, setProjId] = useState<number | null>(projectId ?? null);
+  const [projName, setProjName] = useState("");
+  const [needsName, setNeedsName] = useState(!projectId);
   const endRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // Auto-grow textarea
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 120)}px`;
+    }
+  }, [input]);
+
   const sendMessage = async (text: string) => {
-    if (!text.trim() || loading || creating) return;
+    if (!text.trim() || loading) return;
+
+    // If we don't have a project yet, create one first
+    let currentProjId = projId;
+    if (!currentProjId && needsName) {
+      // Use the first message as project name (or a derived name)
+      const name = text.trim().slice(0, 80);
+      try {
+        const proj = await api.createProject(name);
+        currentProjId = proj.id;
+        setProjId(proj.id);
+        setProjName(proj.name);
+        setNeedsName(false);
+      } catch {
+        setMessages([...messages, { role: "assistant", content: "Failed to create project. Please try again." }]);
+        return;
+      }
+    }
+
+    if (!currentProjId) return;
 
     const userMsg: ChatMsg = { role: "user", content: text.trim() };
     const next = [...messages, userMsg];
@@ -112,25 +142,23 @@ const AIBoardChat = ({ projectId, onComplete, onSwitchToManual }: AIChatProps) =
     setLoading(true);
 
     try {
-      const history = messages.map((m) => ({ role: m.role, content: m.content }));
-      const response = await api.aiBuildBoard(text.trim(), history);
+      const response = await api.sendProjectChat(currentProjId, text.trim());
 
       const assistantMsg: ChatMsg = { role: "assistant", content: response.reply };
       const withReply = [...next, assistantMsg];
       setMessages(withReply);
 
-      if (response.create_board) {
-        setCreating(true);
-        try {
-          const board = await api.createBoardFromAI(response.create_board, projectId);
-          onComplete({ projectId: projectId ?? board.id, projectName: board.name });
-        } catch {
-          setMessages([
-            ...withReply,
-            { role: "assistant", content: "Sorry, I couldn't create the board. Please try again." },
-          ]);
-          setCreating(false);
-        }
+      // If the AI made board_updates, the project now has workstreams
+      if (response.board_updates && response.board_updates.length > 0) {
+        // Project is being built — complete when user is satisfied
+      }
+
+      // Check if there's a plan — show approve hint
+      if (response.plan) {
+        setMessages([
+          ...withReply.slice(0, -1),
+          { role: "assistant", content: response.reply + "\n\n**Plan:**\n" + response.plan + "\n\nReply **approve** to build, or tell me what to change." },
+        ]);
       }
     } catch {
       setMessages([
@@ -142,12 +170,18 @@ const AIBoardChat = ({ projectId, onComplete, onSwitchToManual }: AIChatProps) =
     }
   };
 
+  const handleDone = () => {
+    if (projId) {
+      onComplete({ projectId: projId, projectName: projName || "AI Project" });
+    }
+  };
+
   return (
-    <div className="flex flex-col" style={{ height: "400px" }}>
+    <div className="flex flex-col" style={{ height: "440px" }}>
       <div className="flex-1 overflow-y-auto space-y-3 pr-1">
         {messages.length === 0 && (
           <p className="text-sm text-center pt-4" style={{ color: "var(--gray-text)" }}>
-            Describe your project and the AI will design a Kanban board for you.
+            Describe your project and the AI will design workstreams, columns, and cards for you. The AI will present a plan for your approval before building.
           </p>
         )}
         {messages.map((msg, i) => (
@@ -165,7 +199,7 @@ const AIBoardChat = ({ projectId, onComplete, onSwitchToManual }: AIChatProps) =
             </div>
           </div>
         ))}
-        {(loading || creating) && (
+        {loading && (
           <div className="flex justify-start">
             <div
               className="rounded-2xl px-4 py-3 text-sm"
@@ -175,7 +209,7 @@ const AIBoardChat = ({ projectId, onComplete, onSwitchToManual }: AIChatProps) =
                 color: "var(--gray-text)",
               }}
             >
-              {creating ? "Building your board..." : "Thinking..."}
+              Thinking...
             </div>
           </div>
         )}
@@ -183,36 +217,54 @@ const AIBoardChat = ({ projectId, onComplete, onSwitchToManual }: AIChatProps) =
       </div>
 
       <div className="mt-3 flex gap-2">
-        <input
-          type="text"
+        <textarea
+          ref={textareaRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && sendMessage(input)}
-          placeholder="Describe your project..."
-          disabled={loading || creating}
-          className="flex-1 rounded-xl border bg-white px-4 py-2.5 text-sm outline-none transition focus:border-[var(--primary-blue)]"
-          style={{ borderColor: "var(--stroke)", color: "var(--navy-dark)" }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              sendMessage(input);
+            }
+          }}
+          placeholder={needsName ? "Describe your project (this becomes the project name)..." : "Continue the conversation..."}
+          disabled={loading}
+          rows={1}
+          className="flex-1 resize-none rounded-xl border bg-white px-4 py-2.5 text-sm outline-none transition focus:border-[var(--primary-blue)]"
+          style={{ borderColor: "var(--stroke)", color: "var(--navy-dark)", maxHeight: "120px" }}
           autoFocus
         />
         <button
           type="button"
           onClick={() => sendMessage(input)}
-          disabled={!input.trim() || loading || creating}
-          className="rounded-full px-5 py-2.5 text-xs font-semibold uppercase tracking-wide text-white transition hover:brightness-110 disabled:opacity-40"
+          disabled={!input.trim() || loading}
+          className="self-end rounded-full px-5 py-2.5 text-xs font-semibold uppercase tracking-wide text-white transition hover:brightness-110 disabled:opacity-40"
           style={{ backgroundColor: "var(--secondary-purple)" }}
         >
           Send
         </button>
       </div>
 
-      <button
-        type="button"
-        onClick={onSwitchToManual}
-        className="mt-3 text-center text-xs transition hover:underline"
-        style={{ color: "var(--gray-text)" }}
-      >
-        Switch to manual setup instead
-      </button>
+      <div className="mt-3 flex items-center justify-between">
+        <button
+          type="button"
+          onClick={onSwitchToManual}
+          className="text-xs transition hover:underline"
+          style={{ color: "var(--gray-text)" }}
+        >
+          Switch to manual setup
+        </button>
+        {projId && (
+          <button
+            type="button"
+            onClick={handleDone}
+            className="rounded-full px-5 py-2 text-xs font-semibold uppercase tracking-wide text-white transition hover:brightness-110"
+            style={{ backgroundColor: "var(--primary-blue)" }}
+          >
+            Open Project
+          </button>
+        )}
+      </div>
     </div>
   );
 };

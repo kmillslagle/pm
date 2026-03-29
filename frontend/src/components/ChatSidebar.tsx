@@ -2,18 +2,20 @@
 
 import { useEffect, useRef, useState } from "react";
 import * as api from "@/lib/api";
-import type { BoardData } from "@/lib/kanban";
 
 type ChatSidebarProps = {
   isOpen: boolean;
   onClose: () => void;
-  boardId: number;
-  board: BoardData | null;
-  onBoardRefresh: () => void;
-  onBoardCreated: (boardId: number) => void;
+  projectId: number;
+  onProjectRefresh: () => void;
 };
 
-type ChatMessage = { role: "user" | "assistant"; content: string };
+type ChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+  plan?: string;
+  plan_workstream?: string;
+};
 
 function renderInline(text: string, lineKey: number): React.ReactNode[] {
   const nodes: React.ReactNode[] = [];
@@ -47,7 +49,6 @@ function renderMessage(content: string) {
       parts.push(<br key={`br-${lineIdx}`} />);
     }
 
-    // List items: "- item" or "  - item"
     const listMatch = line.match(/^(\s*)-\s+(.*)$/);
     if (listMatch) {
       parts.push(
@@ -70,31 +71,39 @@ function renderMessage(content: string) {
 export const ChatSidebar = ({
   isOpen,
   onClose,
-  boardId,
-  board,
-  onBoardRefresh,
-  onBoardCreated,
+  projectId,
+  onProjectRefresh,
 }: ChatSidebarProps) => {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [hasPendingPlan, setHasPendingPlan] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const loadedBoardRef = useRef<number | null>(null);
+  const loadedProjectRef = useRef<number | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Load chat history when sidebar opens
   useEffect(() => {
-    if (isOpen && loadedBoardRef.current !== boardId) {
-      loadedBoardRef.current = boardId;
+    if (isOpen && loadedProjectRef.current !== projectId) {
+      loadedProjectRef.current = projectId;
       api
-        .getChatHistory(boardId)
-        .then((history) => setMessages(history))
+        .getProjectChatHistory(projectId)
+        .then((history) => setMessages(history.map((m) => ({ ...m }))))
         .catch(() => setMessages([]));
     }
-  }, [isOpen, boardId]);
+  }, [isOpen, projectId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // Auto-grow textarea
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 160)}px`;
+    }
+  }, [input]);
 
   const sendMessage = async (text: string) => {
     if (!text.trim() || loading) return;
@@ -106,22 +115,28 @@ export const ChatSidebar = ({
     setLoading(true);
 
     try {
-      const response = await api.sendChatMessage(boardId, text.trim());
+      const response = await api.sendProjectChat(projectId, text.trim());
 
       const assistantMsg: ChatMessage = {
         role: "assistant",
         content: response.reply,
+        plan: response.plan ?? undefined,
+        plan_workstream: response.plan_workstream ?? undefined,
       };
       setMessages([...withUser, assistantMsg]);
 
-      if (response.board_updates && response.board_updates.length > 0) {
-        onBoardRefresh();
+      // Track plan state
+      if (response.plan) {
+        setHasPendingPlan(true);
+      } else if (response.board_updates && response.board_updates.length > 0) {
+        setHasPendingPlan(false);
+        onProjectRefresh();
       }
 
       if (response.create_board) {
         try {
-          const newBoard = await api.createBoardFromAI(response.create_board);
-          onBoardCreated(newBoard.id);
+          await api.createBoardFromAI(response.create_board, projectId);
+          onProjectRefresh();
         } catch {
           // Board creation failed — the assistant message is already shown
         }
@@ -142,6 +157,13 @@ export const ChatSidebar = ({
     sendMessage(input);
   };
 
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage(input);
+    }
+  };
+
   return (
     <aside
       className={`flex-shrink-0 flex flex-col overflow-hidden border-l border-[var(--stroke)] bg-white shadow-[-8px_0_32px_rgba(3,33,71,0.12)] transition-[width] duration-300 ${
@@ -155,7 +177,7 @@ export const ChatSidebar = ({
               AI Assistant
             </p>
             <h2 className="mt-1 font-display text-lg font-semibold text-[var(--navy-dark)]">
-              Chat
+              Project Chat
             </h2>
           </div>
           <button
@@ -168,60 +190,99 @@ export const ChatSidebar = ({
 
         <div className="flex-1 overflow-y-auto px-6 py-4">
           {messages.length === 0 && (
-            <p className="text-center text-sm text-[var(--gray-text)]">
-              Ask the AI to help manage your board. It can create, move, update,
-              or delete cards.
+            <p className="mb-4 text-center text-sm text-[var(--gray-text)]">
+              Ask the AI to help manage your project. It can create workstreams, columns, cards, assess quality, and more.
             </p>
           )}
 
+          {/* Quick action buttons */}
           <div className="mb-4 flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={() => sendMessage("show board")}
+              onClick={() => sendMessage("Assess the quality of this board and suggest improvements.")}
               disabled={loading}
-              className="rounded-full border border-[var(--stroke)] px-3 py-1.5 text-xs font-semibold text-[var(--gray-text)] transition hover:border-[var(--primary-blue)] hover:text-[var(--primary-blue)] disabled:opacity-50"
+              className="rounded-full border border-[var(--stroke)] px-3 py-1.5 text-xs font-semibold text-[var(--primary-blue)] transition hover:border-[var(--primary-blue)] disabled:opacity-50"
             >
-              Show board
+              Assess quality
             </button>
             <button
               type="button"
-              onClick={() => sendMessage("help")}
+              onClick={() => sendMessage("I want to add a new workstream to this project.")}
+              disabled={loading}
+              className="rounded-full border border-[var(--stroke)] px-3 py-1.5 text-xs font-semibold text-[var(--secondary-purple)] transition hover:border-[var(--secondary-purple)] disabled:opacity-50"
+            >
+              Add workstream
+            </button>
+            <button
+              type="button"
+              onClick={() => sendMessage("Help me understand what I can do here.")}
               disabled={loading}
               className="rounded-full border border-[var(--stroke)] px-3 py-1.5 text-xs font-semibold text-[var(--gray-text)] transition hover:border-[var(--primary-blue)] hover:text-[var(--primary-blue)] disabled:opacity-50"
             >
               Help
             </button>
-            <button
-              type="button"
-              onClick={() =>
-                sendMessage(
-                  "I want to build a new board from scratch. Help me set it up."
-                )
-              }
-              disabled={loading}
-              className="rounded-full border border-[var(--stroke)] px-3 py-1.5 text-xs font-semibold text-[var(--secondary-purple)] transition hover:border-[var(--secondary-purple)] disabled:opacity-50"
-            >
-              Build a Board
-            </button>
           </div>
 
           <div className="space-y-4">
             {messages.map((msg, i) => (
-              <div
-                key={i}
-                className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-              >
+              <div key={i}>
                 <div
-                  className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
-                    msg.role === "user"
-                      ? "bg-[var(--secondary-purple)] text-white"
-                      : "border border-[var(--stroke)] bg-[var(--surface)] text-[var(--navy-dark)]"
-                  }`}
+                  className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
                 >
-                  {msg.role === "assistant"
-                    ? renderMessage(msg.content)
-                    : msg.content}
+                  <div
+                    className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+                      msg.role === "user"
+                        ? "bg-[var(--secondary-purple)] text-white"
+                        : "border border-[var(--stroke)] bg-[var(--surface)] text-[var(--navy-dark)]"
+                    }`}
+                  >
+                    {msg.role === "assistant"
+                      ? renderMessage(msg.content)
+                      : msg.content}
+                  </div>
                 </div>
+
+                {/* Plan display with approve/revise buttons */}
+                {msg.plan && (
+                  <div className="mt-2 ml-0 rounded-2xl border-2 border-[var(--primary-blue)]/30 bg-blue-50/50 p-4">
+                    <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-[var(--primary-blue)]">
+                      Proposed Plan
+                    </p>
+                    <div className="text-sm leading-relaxed text-[var(--navy-dark)]">
+                      {renderMessage(msg.plan)}
+                    </div>
+                    {/* Only show buttons on the last message if plan is pending */}
+                    {i === messages.length - 1 && hasPendingPlan && !loading && (
+                      <div className="mt-3 flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => sendMessage("Approved. Go ahead and implement the plan.")}
+                          className="rounded-full bg-[var(--primary-blue)] px-4 py-1.5 text-xs font-semibold text-white transition hover:brightness-110"
+                        >
+                          Approve
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setInput("I'd like to change the plan: ");
+                            textareaRef.current?.focus();
+                          }}
+                          className="rounded-full border border-[var(--stroke)] px-4 py-1.5 text-xs font-semibold text-[var(--gray-text)] transition hover:text-[var(--navy-dark)]"
+                        >
+                          Revise
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Workstream progress indicator */}
+                {msg.plan_workstream && (
+                  <div className="mt-1 ml-0 flex items-center gap-2 text-xs text-[var(--primary-blue)]">
+                    <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-[var(--primary-blue)]" />
+                    Building: {msg.plan_workstream}
+                  </div>
+                )}
               </div>
             ))}
             {loading && (
@@ -240,18 +301,21 @@ export const ChatSidebar = ({
           className="border-t border-[var(--stroke)] px-6 py-4"
         >
           <div className="flex gap-3">
-            <input
-              type="text"
+            <textarea
+              ref={textareaRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask anything about your board..."
-              className="flex-1 rounded-xl border border-[var(--stroke)] bg-white px-4 py-3 text-sm text-[var(--navy-dark)] outline-none transition focus:border-[var(--primary-blue)]"
+              onKeyDown={handleKeyDown}
+              placeholder="Ask anything about your project..."
+              rows={1}
+              className="flex-1 resize-none rounded-xl border border-[var(--stroke)] bg-white px-4 py-3 text-sm text-[var(--navy-dark)] outline-none transition focus:border-[var(--primary-blue)]"
+              style={{ maxHeight: "160px" }}
               disabled={loading}
             />
             <button
               type="submit"
               disabled={loading || !input.trim()}
-              className="rounded-full bg-[var(--secondary-purple)] px-5 py-3 text-xs font-semibold uppercase tracking-wide text-white transition hover:brightness-110 disabled:opacity-50"
+              className="self-end rounded-full bg-[var(--secondary-purple)] px-5 py-3 text-xs font-semibold uppercase tracking-wide text-white transition hover:brightness-110 disabled:opacity-50"
             >
               Send
             </button>
