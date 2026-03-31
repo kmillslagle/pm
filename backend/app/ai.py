@@ -7,7 +7,7 @@ from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel
 
 from app.auth import get_current_user
-from app.board import create_columns
+from app.board import create_columns, _verify_project_access
 from app.database import get_connection
 
 router = APIRouter(prefix="/api")
@@ -102,18 +102,6 @@ def _get_project_json(project_id: int) -> dict:
         })
     conn.close()
     return {"project_name": proj["name"], "project_id": proj["id"], "workstreams": workstreams}
-
-
-def _verify_project_owner(project_id: int, username: str) -> None:
-    conn = get_connection()
-    row = conn.execute(
-        "SELECT p.id FROM projects p JOIN users u ON p.user_id = u.id "
-        "WHERE p.id = ? AND u.username = ?",
-        (project_id, username),
-    ).fetchone()
-    conn.close()
-    if not row:
-        raise HTTPException(status_code=404, detail="Project not found")
 
 
 def _get_project_chat_history(project_id: int, limit: int = 20) -> list[dict]:
@@ -445,7 +433,7 @@ Be concise in your reply text. Let the board speak for itself."""
 def project_chat(body: ChatRequest, request: Request, project_id: int = Query(...)) -> ChatResponse:
     """Project-scoped AI chat with full project context."""
     username = get_current_user(request)
-    _verify_project_owner(project_id, username)
+    _verify_project_access(project_id, username)
 
     project_json = _get_project_json(project_id)
     history = _get_project_chat_history(project_id)
@@ -499,7 +487,7 @@ def project_chat(body: ChatRequest, request: Request, project_id: int = Query(..
 @router.get("/chat/project/history")
 def project_chat_history(request: Request, project_id: int = Query(...)) -> list[dict]:
     username = get_current_user(request)
-    _verify_project_owner(project_id, username)
+    _verify_project_access(project_id, username)
     return _get_project_chat_history(project_id, limit=50)
 
 

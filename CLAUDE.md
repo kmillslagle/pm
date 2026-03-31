@@ -75,6 +75,15 @@ The project board header shows the project name, stats, and **workstream tabs**.
 
 The app is fully project-based — there are no standalone boards. Every board lives inside a project.
 
+### Project Sharing
+
+Projects support shared access via the `project_members` junction table. The project owner (creator) always has full access. Additional users can be added as members, granting them full read+write access (create/edit/delete cards, columns, workstreams, use AI chat). Shared projects appear in each member's project list alongside their own projects.
+
+- **Schema**: `project_members(id, project_id, user_id)` with a unique constraint on `(project_id, user_id)`.
+- **Access checks**: All project/board/column/card queries use `_accessible_project_ids_sql()` and `_verify_project_access()` from board.py to check both ownership and membership. ai.py imports `_verify_project_access` from board.py.
+- **Delete**: Only the project owner can delete a project (not members). Deletion cascades to remove `project_members` rows.
+- **Seeding**: New members are seeded in `init_db()` (database.py). Users are auto-created if they don't exist yet.
+
 ### Sample Project
 
 A hardcoded sample project ("Sample-Bake a cake") is defined in `frontend/src/lib/sampleProject.ts` and always appears first in the project list. It has 2 workstreams with 3 cards each, demonstrating all card fields (priority, deliverable type, dependencies, notes, subtasks, key references).
@@ -172,7 +181,7 @@ Python FastAPI app serving the API and the static Next.js build.
 
 **Auth**: Azure Entra ID (single-tenant + guest users) via App Service Easy Auth. The `X-MS-CLIENT-PRINCIPAL-NAME` header identifies the user; the backend auto-creates local user records on first login. A session cookie is set on `/auth/me` for subsequent API calls. No login/register endpoints — Entra ID handles all authentication. Local dev falls back to session cookie auth.
 
-**Multi-project**: Each user can have multiple projects. Each project has multiple workstreams. All card/column operations verify ownership through the user→board→column→card chain.
+**Multi-project**: Each user can have multiple projects. Each project has multiple workstreams. All card/column operations verify access through the user→project (owner or member)→board→column→card chain. Projects can be shared with other users via the `project_members` table.
 
 **AI Chat System**: Project-scoped via `POST /api/chat/project`. The AI receives full project state (all workstreams, columns, cards) and can execute 8 action types: `rename_project`, `create_workstream`, `add_column`, `rename_column`, `create_card` (all 9 fields), `update_card`, `move_card`, `delete_card`. Uses a plan-first workflow — for complex changes, the AI presents a plan for approval, then executes workstream-by-workstream. Chat history stored in `chat_messages` table with `project_id` (`board_id` is nullable for projects with no workstreams yet). Skills: Board Builder, Board Quality Assessment, Card Enrichment, Workstream Management.
 

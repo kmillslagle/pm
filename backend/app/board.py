@@ -129,12 +129,36 @@ def _card_dict(card) -> dict:
     }
 
 
-def _verify_board_owner(board_id: int, username: str) -> None:
+def _accessible_project_ids_sql() -> str:
+    """SQL subquery returning project IDs a user can access (as owner or member).
+
+    Requires two consecutive ? params, both bound to the username.
+    """
+    return (
+        "SELECT p.id FROM projects p JOIN users u ON p.user_id = u.id WHERE u.username = ? "
+        "UNION "
+        "SELECT pm.project_id FROM project_members pm JOIN users u ON pm.user_id = u.id WHERE u.username = ?"
+    )
+
+
+def _verify_project_access(project_id: int, username: str) -> None:
+    """Raise 404 if username is neither owner nor member of project."""
     conn = get_connection()
     row = conn.execute(
-        "SELECT b.id FROM boards b JOIN users u ON b.user_id = u.id "
-        "WHERE b.id = ? AND u.username = ?",
-        (board_id, username),
+        f"SELECT id FROM ({_accessible_project_ids_sql()}) AS ap WHERE ap.id = ?",
+        (username, username, project_id),
+    ).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+
+def _verify_board_access(board_id: int, username: str) -> None:
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT b.id FROM boards b "
+        f"WHERE b.id = ? AND b.project_id IN ({_accessible_project_ids_sql()})",
+        (board_id, username, username),
     ).fetchone()
     conn.close()
     if not row:
@@ -148,11 +172,10 @@ def list_projects(request: Request) -> list[ProjectInfo]:
     rows = conn.execute(
         "SELECT p.id, p.name, COUNT(b.id) as workstream_count "
         "FROM projects p "
-        "JOIN users u ON p.user_id = u.id "
         "LEFT JOIN boards b ON b.project_id = p.id "
-        "WHERE u.username = ? "
+        f"WHERE p.id IN ({_accessible_project_ids_sql()}) "
         "GROUP BY p.id ORDER BY p.id",
-        (username,),
+        (username, username),
     ).fetchall()
     conn.close()
     return [ProjectInfo(id=r["id"], name=r["name"], workstream_count=r["workstream_count"]) for r in rows]
@@ -179,9 +202,8 @@ def update_project(project_id: int, body: ProjectUpdate, request: Request) -> Pr
         raise HTTPException(status_code=400, detail="Name required")
     conn = get_connection()
     row = conn.execute(
-        "SELECT p.id FROM projects p JOIN users u ON p.user_id = u.id "
-        "WHERE p.id = ? AND u.username = ?",
-        (project_id, username),
+        f"SELECT id FROM ({_accessible_project_ids_sql()}) AS ap WHERE ap.id = ?",
+        (username, username, project_id),
     ).fetchone()
     if not row:
         conn.close()
@@ -199,6 +221,7 @@ def update_project(project_id: int, body: ProjectUpdate, request: Request) -> Pr
 def delete_project(project_id: int, request: Request) -> dict:
     username = get_current_user(request)
     conn = get_connection()
+    # Owner-only: members cannot delete projects
     proj = conn.execute(
         "SELECT p.id FROM projects p JOIN users u ON p.user_id = u.id "
         "WHERE p.id = ? AND u.username = ?", (project_id, username)
@@ -206,7 +229,7 @@ def delete_project(project_id: int, request: Request) -> dict:
     if not proj:
         conn.close()
         raise HTTPException(status_code=404, detail="Project not found")
-    # Cascade: delete cards, columns, boards, then project
+    # Cascade: delete cards, columns, chat messages, boards, members, then project
     board_ids = [r["id"] for r in conn.execute(
         "SELECT id FROM boards WHERE project_id = ?", (project_id,)
     ).fetchall()]
@@ -218,7 +241,9 @@ def delete_project(project_id: int, request: Request) -> dict:
             conn.execute("DELETE FROM cards WHERE column_id = ?", (cid,))
         conn.execute("DELETE FROM board_columns WHERE board_id = ?", (bid,))
         conn.execute("DELETE FROM chat_messages WHERE board_id = ?", (bid,))
+    conn.execute("DELETE FROM chat_messages WHERE project_id = ?", (project_id,))
     conn.execute("DELETE FROM boards WHERE project_id = ?", (project_id,))
+    conn.execute("DELETE FROM project_members WHERE project_id = ?", (project_id,))
     conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
     conn.commit()
     conn.close()
@@ -230,8 +255,8 @@ def list_workstreams(project_id: int, request: Request) -> list[BoardInfo]:
     username = get_current_user(request)
     conn = get_connection()
     proj = conn.execute(
-        "SELECT p.id FROM projects p JOIN users u ON p.user_id = u.id "
-        "WHERE p.id = ? AND u.username = ?", (project_id, username)
+        f"SELECT id FROM ({_accessible_project_ids_sql()}) AS ap WHERE ap.id = ?",
+        (username, username, project_id),
     ).fetchone()
     if not proj:
         conn.close()
@@ -251,8 +276,8 @@ def create_workstream(project_id: int, body: BoardCreate, request: Request) -> B
         raise HTTPException(status_code=400, detail="Name required")
     conn = get_connection()
     proj = conn.execute(
-        "SELECT p.id FROM projects p JOIN users u ON p.user_id = u.id "
-        "WHERE p.id = ? AND u.username = ?", (project_id, username)
+        f"SELECT id FROM ({_accessible_project_ids_sql()}) AS ap WHERE ap.id = ?",
+        (username, username, project_id),
     ).fetchone()
     if not proj:
         conn.close()
@@ -273,13 +298,14 @@ def create_workstream(project_id: int, body: BoardCreate, request: Request) -> B
 def get_project_board(project_id: int, request: Request) -> ProjectBoardResponse:
     username = get_current_user(request)
     conn = get_connection()
-    proj = conn.execute(
-        "SELECT p.id, p.name FROM projects p JOIN users u ON p.user_id = u.id "
-        "WHERE p.id = ? AND u.username = ?", (project_id, username)
+    access = conn.execute(
+        f"SELECT id FROM ({_accessible_project_ids_sql()}) AS ap WHERE ap.id = ?",
+        (username, username, project_id),
     ).fetchone()
-    if not proj:
+    if not access:
         conn.close()
         raise HTTPException(status_code=404, detail="Project not found")
+    proj = conn.execute("SELECT id, name FROM projects WHERE id = ?", (project_id,)).fetchone()
     boards = conn.execute(
         "SELECT id, name FROM boards WHERE project_id = ? ORDER BY id",
         (project_id,),
@@ -316,11 +342,11 @@ def get_project_board(project_id: int, request: Request) -> ProjectBoardResponse
 def create_project_board(project_id: int, body: ProjectBoardCreate, request: Request) -> ProjectBoardResponse:
     username = get_current_user(request)
     conn = get_connection()
-    proj = conn.execute(
-        "SELECT p.id, p.name FROM projects p JOIN users u ON p.user_id = u.id "
-        "WHERE p.id = ? AND u.username = ?", (project_id, username)
+    access = conn.execute(
+        f"SELECT id FROM ({_accessible_project_ids_sql()}) AS ap WHERE ap.id = ?",
+        (username, username, project_id),
     ).fetchone()
-    if not proj:
+    if not access:
         conn.close()
         raise HTTPException(status_code=404, detail="Project not found")
     user_row = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
@@ -354,7 +380,7 @@ class ColumnCreate(BaseModel):
 @router.post("/boards/{board_id}/columns")
 def add_column(board_id: int, body: ColumnCreate, request: Request) -> dict:
     username = get_current_user(request)
-    _verify_board_owner(board_id, username)
+    _verify_board_access(board_id, username)
     if not body.title.strip():
         raise HTTPException(status_code=400, detail="Column title required")
     conn = get_connection()
@@ -378,8 +404,8 @@ def update_column(column_id: str, body: ColumnUpdate, request: Request) -> dict:
     conn = get_connection()
     row = conn.execute(
         "SELECT bc.id FROM board_columns bc JOIN boards b ON bc.board_id = b.id "
-        "JOIN users u ON b.user_id = u.id WHERE bc.id = ? AND u.username = ?",
-        (column_id, username),
+        f"WHERE bc.id = ? AND b.project_id IN ({_accessible_project_ids_sql()})",
+        (column_id, username, username),
     ).fetchone()
     if not row:
         conn.close()
@@ -397,8 +423,8 @@ def create_card(column_id: str, body: CardCreate, request: Request) -> dict:
 
     col = conn.execute(
         "SELECT bc.id FROM board_columns bc JOIN boards b ON bc.board_id = b.id "
-        "JOIN users u ON b.user_id = u.id WHERE bc.id = ? AND u.username = ?",
-        (column_id, username),
+        f"WHERE bc.id = ? AND b.project_id IN ({_accessible_project_ids_sql()})",
+        (column_id, username, username),
     ).fetchone()
     if not col:
         conn.close()
@@ -433,9 +459,9 @@ def update_card(card_id: str, body: CardUpdate, request: Request) -> dict:
     conn = get_connection()
     card = conn.execute(
         "SELECT c.* FROM cards c JOIN board_columns bc ON c.column_id = bc.id "
-        "JOIN boards b ON bc.board_id = b.id JOIN users u ON b.user_id = u.id "
-        "WHERE c.id = ? AND u.username = ?",
-        (card_id, username),
+        "JOIN boards b ON bc.board_id = b.id "
+        f"WHERE c.id = ? AND b.project_id IN ({_accessible_project_ids_sql()})",
+        (card_id, username, username),
     ).fetchone()
     if not card:
         conn.close()
@@ -473,9 +499,9 @@ def delete_card(card_id: str, request: Request) -> dict:
     conn = get_connection()
     card = conn.execute(
         "SELECT c.id FROM cards c JOIN board_columns bc ON c.column_id = bc.id "
-        "JOIN boards b ON bc.board_id = b.id JOIN users u ON b.user_id = u.id "
-        "WHERE c.id = ? AND u.username = ?",
-        (card_id, username),
+        "JOIN boards b ON bc.board_id = b.id "
+        f"WHERE c.id = ? AND b.project_id IN ({_accessible_project_ids_sql()})",
+        (card_id, username, username),
     ).fetchone()
     if not card:
         conn.close()
@@ -493,9 +519,9 @@ def move_card(card_id: str, body: CardMove, request: Request) -> dict:
 
     card = conn.execute(
         "SELECT c.* FROM cards c JOIN board_columns bc ON c.column_id = bc.id "
-        "JOIN boards b ON bc.board_id = b.id JOIN users u ON b.user_id = u.id "
-        "WHERE c.id = ? AND u.username = ?",
-        (card_id, username),
+        "JOIN boards b ON bc.board_id = b.id "
+        f"WHERE c.id = ? AND b.project_id IN ({_accessible_project_ids_sql()})",
+        (card_id, username, username),
     ).fetchone()
     if not card:
         conn.close()
@@ -503,8 +529,8 @@ def move_card(card_id: str, body: CardMove, request: Request) -> dict:
 
     col = conn.execute(
         "SELECT bc.id FROM board_columns bc JOIN boards b ON bc.board_id = b.id "
-        "JOIN users u ON b.user_id = u.id WHERE bc.id = ? AND u.username = ?",
-        (body.column_id, username),
+        f"WHERE bc.id = ? AND b.project_id IN ({_accessible_project_ids_sql()})",
+        (body.column_id, username, username),
     ).fetchone()
     if not col:
         conn.close()

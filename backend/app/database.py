@@ -57,6 +57,12 @@ def init_db() -> None:
             username TEXT NOT NULL,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
+        CREATE TABLE IF NOT EXISTS project_members (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL REFERENCES projects(id),
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            UNIQUE(project_id, user_id)
+        );
     """)
 
     conn.commit()
@@ -89,4 +95,30 @@ def init_db() -> None:
     except Exception:
         pass
     conn.commit()
+
+    # Seed project members for FFTC Implementation sharing
+    project = conn.execute(
+        "SELECT id FROM projects WHERE name = 'FFTC Implementation'"
+    ).fetchone()
+    if project:
+        member_usernames = [
+            "cayala@sungatecap.com",
+            "bmalac@deanmead.com",
+            "LoriL@fullsail.com",
+            "ehaddock@sungatecap.com",
+        ]
+        for uname in member_usernames:
+            user = conn.execute("SELECT id FROM users WHERE username = ?", (uname,)).fetchone()
+            if not user:
+                conn.execute(
+                    "INSERT INTO users (username, password) VALUES (?, ?)",
+                    (uname, "entra-id-managed"),
+                )
+                user = conn.execute("SELECT id FROM users WHERE username = ?", (uname,)).fetchone()
+            conn.execute(
+                "INSERT OR IGNORE INTO project_members (project_id, user_id) VALUES (?, ?)",
+                (project["id"], user["id"]),
+            )
+        conn.commit()
+
     conn.close()
