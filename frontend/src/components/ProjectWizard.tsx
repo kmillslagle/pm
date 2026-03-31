@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import * as api from "@/lib/api";
+import { renderMessage } from "@/lib/renderMessage";
 
 type Props = {
   projectId?: number; // if set, adds workstreams to existing project
@@ -51,39 +52,6 @@ function resolveColumns(ws: WorkstreamConfig): string[] {
 /* ---- AI chat sub-component ---- */
 
 type ChatMsg = { role: "user" | "assistant"; content: string };
-
-function renderInline(text: string, key: number): React.ReactNode[] {
-  const nodes: React.ReactNode[] = [];
-  const regex = /\*\*(.+?)\*\*/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = regex.exec(text)) !== null) {
-    if (match.index > lastIndex) nodes.push(text.slice(lastIndex, match.index));
-    nodes.push(<strong key={`b-${key}-${match.index}`}>{match[1]}</strong>);
-    lastIndex = regex.lastIndex;
-  }
-  if (lastIndex < text.length) nodes.push(text.slice(lastIndex));
-  return nodes;
-}
-
-function renderMessage(content: string) {
-  const parts: React.ReactNode[] = [];
-  content.split("\n").forEach((line, i) => {
-    if (i > 0) parts.push(<br key={`br-${i}`} />);
-    const listMatch = line.match(/^(\s*)-\s+(.*)$/);
-    if (listMatch) {
-      parts.push(
-        <span key={`li-${i}`} className="flex gap-1.5">
-          <span className="shrink-0">&bull;</span>
-          <span>{renderInline(listMatch[2], i)}</span>
-        </span>
-      );
-    } else {
-      parts.push(<span key={`line-${i}`}>{renderInline(line, i)}</span>);
-    }
-  });
-  return <>{parts}</>;
-}
 
 type AIChatProps = {
   projectId?: number;
@@ -372,7 +340,7 @@ export const ProjectWizard = ({ projectId, isNewProject, onComplete, onCancel }:
 
   const [projectName, setProjectName] = useState("");
   const [workstreams, setWorkstreams] = useState<WorkstreamConfig[]>([
-    { name: "", template: null, customColumns: ["", "", ""] },
+    { name: "", template: "simple", customColumns: ["", "", ""] },
   ]);
   const [activeWsIndex, setActiveWsIndex] = useState(0);
   const [creating, setCreating] = useState(false);
@@ -383,7 +351,7 @@ export const ProjectWizard = ({ projectId, isNewProject, onComplete, onCancel }:
 
   const addWorkstream = () => {
     if (workstreams.length < MAX_WORKSTREAMS) {
-      setWorkstreams([...workstreams, { name: "", template: null, customColumns: ["", "", ""] }]);
+      setWorkstreams([...workstreams, { name: "", template: "simple", customColumns: ["", "", ""] }]);
     }
   };
 

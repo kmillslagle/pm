@@ -15,20 +15,6 @@ export async function apiFetch<T>(path: string, options?: RequestInit): Promise<
   return res.json() as Promise<T>;
 }
 
-export async function login(username: string, password: string): Promise<{ username: string }> {
-  return apiFetch("/api/auth/login", {
-    method: "POST",
-    body: JSON.stringify({ username, password }),
-  });
-}
-
-export async function register(username: string, password: string, email?: string): Promise<{ username: string }> {
-  return apiFetch("/api/auth/register", {
-    method: "POST",
-    body: JSON.stringify({ username, password, ...(email ? { email } : {}) }),
-  });
-}
-
 export async function logout(): Promise<void> {
   await apiFetch("/api/auth/logout", { method: "POST" });
 }
@@ -37,37 +23,11 @@ export async function getMe(): Promise<{ username: string }> {
   return apiFetch("/api/auth/me");
 }
 
-export type Subtask = { id: string; title: string; done: boolean };
+import type { Subtask, Card, Column, WorkstreamData, ProjectBoardData } from "@/lib/kanban";
+export type { Subtask, Card, Column, WorkstreamData, ProjectBoardData };
 
-export type Card = {
-  id: string;
-  title: string;
-  details: string;
-  priority?: "high" | "medium" | "low" | "none";
-  notes?: string;
-  dueDate?: string;
-  subtasks?: Subtask[];
-  dependencies?: string[];
-  deliverableType?: string;
-  keyReferences?: string;
-};
-
-export type Column = { id: string; title: string; cardIds: string[] };
 export type BoardInfo = { id: number; name: string; project_id?: number | null };
 export type ProjectInfo = { id: number; name: string; workstream_count: number };
-
-export type WorkstreamData = {
-  id: number;
-  name: string;
-  columns: Column[];
-  cards: Record<string, Card>;
-};
-
-export type ProjectBoardData = {
-  project_id: number;
-  project_name: string;
-  workstreams: WorkstreamData[];
-};
 
 export async function listProjects(): Promise<ProjectInfo[]> {
   return apiFetch("/api/projects");
@@ -75,6 +35,13 @@ export async function listProjects(): Promise<ProjectInfo[]> {
 
 export async function createProject(name: string): Promise<ProjectInfo> {
   return apiFetch("/api/projects", { method: "POST", body: JSON.stringify({ name }) });
+}
+
+export async function updateProject(projectId: number, name: string): Promise<ProjectInfo> {
+  return apiFetch(`/api/projects/${projectId}`, {
+    method: "PUT",
+    body: JSON.stringify({ name }),
+  });
 }
 
 export async function deleteProject(projectId: number): Promise<void> {
@@ -152,9 +119,16 @@ export async function updateCard(
     key_references?: string;
   }
 ): Promise<Card> {
+  const payload: Record<string, unknown> = { ...fields };
+  if (fields.subtasks !== undefined) {
+    payload.subtasks = JSON.stringify(fields.subtasks);
+  }
+  if (fields.dependencies !== undefined) {
+    payload.dependencies = JSON.stringify(fields.dependencies);
+  }
   return apiFetch(`/api/cards/${cardId}`, {
     method: "PUT",
-    body: JSON.stringify(fields),
+    body: JSON.stringify(payload),
   });
 }
 
@@ -180,15 +154,9 @@ export type BoardUpdate = {
   key_references?: string;
 };
 
-export type CreateBoardPayload = {
-  name: string;
-  columns: { name: string; cards: { title: string; details: string }[] }[];
-};
-
 export type ChatResponse = {
   reply: string;
   board_updates: BoardUpdate[];
-  create_board?: CreateBoardPayload;
   plan?: string;
   plan_workstream?: string;
 };
@@ -204,18 +172,10 @@ export async function getProjectChatHistory(projectId: number): Promise<ChatMess
   return apiFetch(`/api/chat/project/history?project_id=${projectId}`);
 }
 
-export async function createBoardFromAI(payload: CreateBoardPayload, projectId?: number): Promise<BoardInfo> {
-  return apiFetch("/api/boards/from-ai", {
-    method: "POST",
-    body: JSON.stringify({ ...payload, ...(projectId != null ? { project_id: projectId } : {}) }),
-  });
-}
-
 export async function uploadPdf(file: File): Promise<{ text: string; filename: string; pages: number }> {
-  const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "";
   const formData = new FormData();
   formData.append("file", file);
-  const res = await fetch(`${API_BASE_URL}/api/upload/pdf`, {
+  const res = await fetch(`${API_BASE}/api/upload/pdf`, {
     method: "POST",
     credentials: "include",
     body: formData,

@@ -30,6 +30,7 @@ type ProjectBoardProps = {
   projectId: number;
   projectBoard: ProjectBoardData;
   onProjectBoardChange: (board: ProjectBoardData) => void;
+  onProjectNameChange?: (name: string) => void;
   isSample?: boolean;
 };
 
@@ -37,12 +38,15 @@ export const ProjectBoard = ({
   projectId,
   projectBoard,
   onProjectBoardChange,
+  onProjectNameChange,
   isSample,
 }: ProjectBoardProps) => {
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
   const [activeWsId, setActiveWsId] = useState<number | null>(null);
   const [selectedCard, setSelectedCard] = useState<Card | null>(null);
   const [selectedWsId, setSelectedWsId] = useState<number | null>(null);
+  const [editingName, setEditingName] = useState(false);
+  const [nameInput, setNameInput] = useState(projectBoard.project_name);
 
   // Currently viewed workstream
   const [currentWsId, setCurrentWsId] = useState<number | null>(
@@ -59,6 +63,29 @@ export const ProjectBoard = ({
       setCurrentWsId(projectBoard.workstreams[0]?.id ?? null);
     }
   }, [projectBoard.workstreams, currentWsId]);
+
+  // Keep nameInput in sync when projectBoard changes (e.g. after AI rename)
+  useEffect(() => {
+    setNameInput(projectBoard.project_name);
+    setEditingName(false);
+  }, [projectBoard.project_name]);
+
+  const handleRenameSave = async () => {
+    const trimmed = nameInput.trim();
+    if (!trimmed || trimmed === projectBoard.project_name || isSample) {
+      setEditingName(false);
+      setNameInput(projectBoard.project_name);
+      return;
+    }
+    try {
+      await api.updateProject(projectId, trimmed);
+      onProjectBoardChange({ ...projectBoard, project_name: trimmed });
+      onProjectNameChange?.(trimmed);
+    } catch {
+      setNameInput(projectBoard.project_name);
+    }
+    setEditingName(false);
+  };
 
   // Inline add workstream
   const [showAddWs, setShowAddWs] = useState(false);
@@ -336,12 +363,6 @@ export const ProjectBoard = ({
     return currentWs.cards[activeCardId] ?? null;
   }, [activeCardId, currentWs]);
 
-  const modalColumns = useMemo(() => {
-    if (selectedWsId == null) return [];
-    const ws = projectBoard.workstreams.find((w) => w.id === selectedWsId);
-    return ws?.columns ?? [];
-  }, [selectedWsId, projectBoard.workstreams]);
-
   const totalCards = projectBoard.workstreams.reduce(
     (sum, ws) => sum + Object.keys(ws.cards).length,
     0
@@ -363,9 +384,28 @@ export const ProjectBoard = ({
               <p className="text-xs font-semibold uppercase tracking-[0.35em] text-[var(--gray-text)]">
                 Project Board
               </p>
-              <h1 className="mt-3 font-display text-4xl font-semibold text-[var(--navy-dark)]">
-                {projectBoard.project_name}
-              </h1>
+              {editingName ? (
+                <input
+                  value={nameInput}
+                  onChange={(e) => setNameInput(e.target.value)}
+                  onBlur={handleRenameSave}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleRenameSave();
+                    if (e.key === "Escape") { setEditingName(false); setNameInput(projectBoard.project_name); }
+                  }}
+                  className="mt-3 w-full rounded-xl border bg-white px-3 py-1 font-display text-4xl font-semibold text-[var(--navy-dark)] outline-none transition focus:border-[var(--primary-blue)]"
+                  style={{ borderColor: "var(--stroke)" }}
+                  autoFocus
+                />
+              ) : (
+                <h1
+                  className="mt-3 cursor-pointer rounded-xl px-3 py-1 font-display text-4xl font-semibold text-[var(--navy-dark)] transition hover:bg-[var(--surface)]"
+                  onClick={() => { if (!isSample) setEditingName(true); }}
+                  title={isSample ? undefined : "Click to rename"}
+                >
+                  {projectBoard.project_name}
+                </h1>
+              )}
             </div>
             <div className="flex items-center gap-4">
               <div className="rounded-2xl border border-[var(--stroke)] bg-[var(--surface)] px-5 py-4">
@@ -566,7 +606,6 @@ export const ProjectBoard = ({
       {selectedCard && (
         <CardDetailModal
           card={selectedCard}
-          columns={modalColumns}
           onSave={handleUpdateCard}
           onDelete={handleDeleteFromModal}
           onClose={() => setSelectedCard(null)}

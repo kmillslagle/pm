@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A full-stack Kanban project management app — fully project-based (no standalone boards). Features user accounts, compact cards with rich metadata, and a project-scoped AI chat assistant that can manage workstreams, columns, and cards with a plan-first workflow. Includes a built-in sample project for onboarding. Built with Next.js frontend, Python FastAPI backend, SQLite database, and the Claude API. Runs in Docker.
+A full-stack Kanban project management app — fully project-based (no standalone boards). Features Entra ID authentication, compact cards with rich metadata, and a project-scoped AI chat assistant that can manage workstreams, columns, and cards with a plan-first workflow. Includes a built-in sample project for onboarding. Built with Next.js frontend, Python FastAPI backend, SQLite database, and the Claude API. Deployed to Azure App Service; also runs locally in Docker.
 
 ## Self-Maintenance Rule
 
@@ -45,6 +45,18 @@ Run a single test file:
 npx vitest run src/components/ProjectBoard.test.tsx   # frontend
 uv run pytest tests/test_api.py::TestBoards -v        # backend
 ```
+
+Azure deployment (run from project root):
+
+```bash
+bash scripts/deploy-azure.sh     # First-time: creates all Azure resources and deploys
+bash scripts/redeploy-azure.sh   # Code updates: rebuild image and restart
+bash scripts/teardown-azure.sh   # Delete all Azure resources
+```
+
+Live URL: `https://kanban-studio-app.azurewebsites.net`
+
+Azure resources: Resource Group `kanban-studio-rg`, ACR `kanbanstudioacr`, App Service `kanban-studio-app`, Storage `kanbanstudiostore` with file share `kanban-data` mounted at `/app/data`. Entra ID app registration `Kanban Studio` (single-tenant, client ID `247ec411-f9dd-4b51-b97e-7a53ed35f2b4`).
 
 ## Architecture
 
@@ -100,16 +112,16 @@ Each card contains:
 **API client** (`lib/api.ts`): Typed async functions for all backend endpoints. Key functions:
 - `getProjectBoard(projectId)` — fetches all workstreams with columns and cards in one call
 - `createProjectBoard(projectId, workstreams)` — batch-creates multiple workstreams with columns
+- `updateProject(projectId, name)` — renames a project
 - `addColumn(boardId, title)` — adds a column to an existing board/workstream
 - `sendProjectChat(projectId, message)` — project-scoped AI chat
 - `getProjectChatHistory(projectId)` — project chat history
 - `uploadPdf(file)` — extracts text from a PDF file via backend
-- Auth functions (`login`, `register`, `logout`, `getMe`) handle session cookies
+- Auth functions (`logout`, `getMe`) — Entra ID provides authentication; session cookies used for API calls
 
 **Component tree**:
 ```
-page.tsx (auth check, project selector, layout)
-  ├── LoginForm (sign in / create account toggle, inline errors)
+page.tsx (Entra ID auth check, project selector, layout)
   ├── ProjectWizard (manual: project name → workstream names → columns → review; or AI chat: creates project and uses sendProjectChat API with plan-first flow)
   ├── ProjectBoard (tabbed single-workstream view for projects)
   │   ├── Header: project name, workstream tabs, + Add Workstream, stats
@@ -141,12 +153,13 @@ Python FastAPI app serving the API and the static Next.js build.
 
 **Modules**:
 - `app/main.py` — FastAPI entry point, mounts routers, serves static files
-- `app/auth.py` — Auth routes (login, register, logout, me); salted/hashed passwords; DB-backed session tokens in httponly cookies
+- `app/auth.py` — Auth routes (logout, me); Entra ID header-based auth with auto-provisioning; DB-backed session tokens in httponly cookies
 - `app/board.py` — Board/project CRUD, column/card operations; card fields include priority, notes, due_date, subtasks, dependencies, deliverable_type, key_references
-- `app/ai.py` — Project-scoped AI chat using Claude API. Supports 7 action types (create_workstream, add_column, rename_column, create_card, update_card, move_card, delete_card) with all card fields. Plan-first workflow for complex changes. Skills: Board Builder, Board Quality Assessment, Card Enrichment, Workstream Management.
+- `app/ai.py` — Project-scoped AI chat using Claude API. Supports 8 action types (rename_project, create_workstream, add_column, rename_column, create_card, update_card, move_card, delete_card) with all card fields. Plan-first workflow for complex changes. Skills: Board Builder, Board Quality Assessment, Card Enrichment, Workstream Management.
 - `app/database.py` — SQLite schema init, connection helper with `busy_timeout=5000` to prevent lock errors; sessions stored in DB; migrations add new card/chat columns via ALTER TABLE
 
 **Key API endpoints**:
+- `PUT /api/projects/{id}` — Renames a project
 - `GET /api/projects/{id}/board` — Returns all workstreams with their columns and cards in one response
 - `POST /api/projects/{id}/board` — Batch-creates multiple workstreams with columns in one transaction
 - `GET /api/projects/{id}/workstreams` — Lists workstreams in a project
@@ -157,11 +170,11 @@ Python FastAPI app serving the API and the static Next.js build.
 - `POST /api/upload/pdf` — Extracts text from an uploaded PDF (uses PyMuPDF, 10MB limit)
 - Standard card CRUD: `POST /api/columns/{id}/cards`, `PUT /api/cards/{id}`, `DELETE /api/cards/{id}`, `PUT /api/cards/{id}/move`
 
-**Auth**: Passwords are salted and hashed (SHA-256). Sessions are stored in a `sessions` DB table (not in-memory) so they survive container restarts. Session tokens travel as httponly cookies.
+**Auth**: Azure Entra ID (single-tenant + guest users) via App Service Easy Auth. The `X-MS-CLIENT-PRINCIPAL-NAME` header identifies the user; the backend auto-creates local user records on first login. A session cookie is set on `/auth/me` for subsequent API calls. No login/register endpoints — Entra ID handles all authentication. Local dev falls back to session cookie auth.
 
 **Multi-project**: Each user can have multiple projects. Each project has multiple workstreams. All card/column operations verify ownership through the user→board→column→card chain.
 
-**AI Chat System**: Project-scoped via `POST /api/chat/project`. The AI receives full project state (all workstreams, columns, cards) and can execute 7 action types: `create_workstream`, `add_column`, `rename_column`, `create_card` (all 9 fields), `update_card`, `move_card`, `delete_card`. Uses a plan-first workflow — for complex changes, the AI presents a plan for approval, then executes workstream-by-workstream. Chat history stored in `chat_messages` table with `project_id` (FK constraints temporarily disabled for empty projects with no boards yet). Skills: Board Builder, Board Quality Assessment, Card Enrichment, Workstream Management.
+**AI Chat System**: Project-scoped via `POST /api/chat/project`. The AI receives full project state (all workstreams, columns, cards) and can execute 8 action types: `rename_project`, `create_workstream`, `add_column`, `rename_column`, `create_card` (all 9 fields), `update_card`, `move_card`, `delete_card`. Uses a plan-first workflow — for complex changes, the AI presents a plan for approval, then executes workstream-by-workstream. Chat history stored in `chat_messages` table with `project_id` (`board_id` is nullable for projects with no workstreams yet). Skills: Board Builder, Board Quality Assessment, Card Enrichment, Workstream Management.
 
 **AI column resolution**: When creating cards in newly created workstreams (same batch), the AI uses `workstream_name` + `column_title` instead of `column_id`. The backend resolves these to real IDs by looking up the workstream by name and column by title. For existing workstreams, the AI uses real `column_id` values from the project state JSON.
 

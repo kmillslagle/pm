@@ -1,11 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import type { Card, Column, Subtask } from "@/lib/kanban";
+import type { Card, Subtask } from "@/lib/kanban";
 
 type CardDetailModalProps = {
   card: Card;
-  columns: Column[];
   onSave: (
     cardId: string,
     fields: {
@@ -37,7 +36,6 @@ const DELIVERABLE_PRESETS = [
 
 export const CardDetailModal = ({
   card,
-  columns,
   onSave,
   onDelete,
   onClose,
@@ -63,7 +61,6 @@ export const CardDetailModal = ({
   const [newDep, setNewDep] = useState("");
   const [newSubtaskTitle, setNewSubtaskTitle] = useState("");
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [saved, setSaved] = useState(false);
 
   const isPreset = DELIVERABLE_PRESETS.includes(deliverableType);
 
@@ -123,8 +120,7 @@ export const CardDetailModal = ({
       deliverable_type: deliverableType,
       key_references: keyReferences,
     });
-    setSaved(true);
-    setTimeout(() => setSaved(false), 1500);
+    onClose();
   };
 
   const handleDeleteCard = () => {
@@ -461,9 +457,9 @@ export const CardDetailModal = ({
               type="button"
               onClick={handleSave}
               className="rounded-full px-6 py-2.5 text-xs font-semibold uppercase tracking-wide text-white transition hover:brightness-110"
-              style={{ backgroundColor: saved ? "#22c55e" : "var(--primary-blue)" }}
+              style={{ backgroundColor: "var(--primary-blue)" }}
             >
-              {saved ? "Saved!" : "Save"}
+              Save
             </button>
           </div>
         </div>

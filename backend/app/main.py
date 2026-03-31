@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -17,9 +18,13 @@ app = FastAPI(title="Kanban Studio API")
 
 init_db()
 
+# CORS: restrict to app domain in production, allow all in dev
+_allowed_origins = os.environ.get(
+    "CORS_ORIGINS", "https://kanban-studio-app.azurewebsites.net"
+).split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -38,6 +43,8 @@ if not STATIC_DIR.is_dir():
 @app.get("/api/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
 
 
 # Serve frontend - must be registered after API routes

@@ -4,7 +4,6 @@ import { useCallback, useEffect, useState } from "react";
 import { ProjectBoard } from "@/components/ProjectBoard";
 import { ChatSidebar } from "@/components/ChatSidebar";
 import { ProjectWizard } from "@/components/ProjectWizard";
-import { LoginForm } from "@/components/LoginForm";
 import * as api from "@/lib/api";
 import type { ProjectBoardData } from "@/lib/kanban";
 import { SAMPLE_PROJECT, SAMPLE_PROJECT_ID } from "@/lib/sampleProject";
@@ -50,11 +49,6 @@ export default function Home() {
 
   // --- Auth handlers ---
 
-  const handleLogin = useCallback(async (user: string) => {
-    setUsername(user);
-    await loadData();
-  }, [loadData]);
-
   const handleLogout = useCallback(async () => {
     await api.logout();
     setUsername(null);
@@ -96,10 +90,20 @@ export default function Home() {
     try {
       const pb = await api.getProjectBoard(activeProjectId);
       setProjectBoard(pb);
+      // Also refresh project list in case name changed
+      const projectList = await api.listProjects();
+      setProjects(projectList);
     } catch {
       // ignore
     }
   }, [activeProjectId, isSampleProject]);
+
+  // Called by ProjectBoard when user renames the project inline
+  const handleProjectNameChange = useCallback((name: string) => {
+    setProjects((prev) =>
+      prev.map((p) => (p.id === activeProjectId ? { ...p, name } : p))
+    );
+  }, [activeProjectId]);
 
   // --- Wizard callbacks ---
 
@@ -129,7 +133,7 @@ export default function Home() {
   if (!ready) return null;
 
   if (authChecked && !username) {
-    return <LoginForm onLogin={handleLogin} />;
+    return null; // Entra ID handles authentication — this state should not occur
   }
 
   // Welcome screen — no active project
@@ -355,6 +359,7 @@ export default function Home() {
                 projectId={activeProjectId}
                 projectBoard={projectBoard}
                 onProjectBoardChange={setProjectBoard}
+                onProjectNameChange={handleProjectNameChange}
                 isSample={isSampleProject}
               />
             </div>

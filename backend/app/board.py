@@ -44,11 +44,6 @@ class CardMove(BaseModel):
     position: int
 
 
-class BoardResponse(BaseModel):
-    columns: list[dict]
-    cards: dict[str, dict]
-
-
 class BoardInfo(BaseModel):
     id: int
     name: str
@@ -67,6 +62,10 @@ class ProjectInfo(BaseModel):
 
 
 class ProjectCreate(BaseModel):
+    name: str
+
+
+class ProjectUpdate(BaseModel):
     name: str
 
 
@@ -91,22 +90,6 @@ class ProjectBoardResponse(BaseModel):
     project_name: str
     workstreams: list[WorkstreamResponse]
 
-
-class AiCardDef(BaseModel):
-    title: str
-    details: str = ""
-    priority: str = "none"
-
-
-class AiColumnDef(BaseModel):
-    title: str
-    cards: list[AiCardDef] = []
-
-
-class AiBoardCreate(BaseModel):
-    name: str
-    columns: list[AiColumnDef]
-    project_id: int | None = None
 
 
 def create_columns(conn, board_id: int, column_names: list[str] | None = None) -> None:
@@ -187,6 +170,29 @@ def create_project(body: ProjectCreate, request: Request) -> ProjectInfo:
     conn.commit()
     conn.close()
     return ProjectInfo(id=project_id, name=body.name.strip())
+
+
+@router.put("/projects/{project_id}")
+def update_project(project_id: int, body: ProjectUpdate, request: Request) -> ProjectInfo:
+    username = get_current_user(request)
+    if not body.name.strip():
+        raise HTTPException(status_code=400, detail="Name required")
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT p.id FROM projects p JOIN users u ON p.user_id = u.id "
+        "WHERE p.id = ? AND u.username = ?",
+        (project_id, username),
+    ).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Project not found")
+    conn.execute("UPDATE projects SET name = ? WHERE id = ?", (body.name.strip(), project_id))
+    conn.commit()
+    ws_count = conn.execute(
+        "SELECT COUNT(*) as c FROM boards WHERE project_id = ?", (project_id,)
+    ).fetchone()["c"]
+    conn.close()
+    return ProjectInfo(id=project_id, name=body.name.strip(), workstream_count=ws_count)
 
 
 @router.delete("/projects/{project_id}")
@@ -339,96 +345,6 @@ def create_project_board(project_id: int, body: ProjectBoardCreate, request: Req
     conn.close()
     return get_project_board(project_id, request)
 
-
-@router.get("/boards")
-def list_boards(request: Request) -> list[BoardInfo]:
-    username = get_current_user(request)
-    conn = get_connection()
-    rows = conn.execute(
-        "SELECT b.id, b.name FROM boards b JOIN users u ON b.user_id = u.id "
-        "WHERE u.username = ? AND b.project_id IS NULL ORDER BY b.id",
-        (username,),
-    ).fetchall()
-    conn.close()
-    return [BoardInfo(id=row["id"], name=row["name"]) for row in rows]
-
-
-@router.post("/boards")
-def create_board(body: BoardCreate, request: Request) -> BoardInfo:
-    username = get_current_user(request)
-    if len(body.name.strip()) < 1:
-        raise HTTPException(status_code=400, detail="Board name is required")
-    conn = get_connection()
-    user_row = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
-    conn.execute(
-        "INSERT INTO boards (user_id, name) VALUES (?, ?)",
-        (user_row["id"], body.name.strip()),
-    )
-    board_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-    column_names = body.columns if body.columns else None
-    create_columns(conn, board_id, column_names)
-    conn.commit()
-    conn.close()
-    return BoardInfo(id=board_id, name=body.name.strip())
-
-
-@router.post("/boards/from-ai")
-def create_board_from_ai(body: AiBoardCreate, request: Request) -> BoardInfo:
-    username = get_current_user(request)
-    if len(body.name.strip()) < 1:
-        raise HTTPException(status_code=400, detail="Board name is required")
-    conn = get_connection()
-    user_row = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
-    conn.execute(
-        "INSERT INTO boards (user_id, name, project_id) VALUES (?, ?, ?)",
-        (user_row["id"], body.name.strip(), body.project_id),
-    )
-    board_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-    for i, col in enumerate(body.columns):
-        col_id = f"col-{secrets.token_hex(4)}"
-        conn.execute(
-            "INSERT INTO board_columns (id, board_id, title, position) VALUES (?, ?, ?, ?)",
-            (col_id, board_id, col.title, i),
-        )
-        for j, card in enumerate(col.cards):
-            card_id = f"card-{secrets.token_hex(4)}"
-            conn.execute(
-                "INSERT INTO cards (id, column_id, title, details, position, priority, notes, due_date, subtasks, dependencies, deliverable_type, key_references) "
-                "VALUES (?, ?, ?, ?, ?, ?, '', NULL, '[]', '[]', '', '')",
-                (card_id, col_id, card.title, card.details, j, card.priority),
-            )
-    conn.commit()
-    conn.close()
-    return BoardInfo(id=board_id, name=body.name.strip())
-
-
-@router.get("/boards/{board_id}")
-def get_board(board_id: int, request: Request) -> BoardResponse:
-    username = get_current_user(request)
-    _verify_board_owner(board_id, username)
-    conn = get_connection()
-
-    cols = conn.execute(
-        "SELECT id, title, position FROM board_columns WHERE board_id = ? ORDER BY position",
-        (board_id,),
-    ).fetchall()
-
-    columns = []
-    cards = {}
-    for col in cols:
-        card_rows = conn.execute(
-            "SELECT id, title, details, priority, notes, due_date, subtasks, dependencies, deliverable_type, key_references "
-            "FROM cards WHERE column_id = ? ORDER BY position",
-            (col["id"],),
-        ).fetchall()
-        card_ids = []
-        for card in card_rows:
-            cards[card["id"]] = _card_dict(card)
-            card_ids.append(card["id"])
-        columns.append({"id": col["id"], "title": col["title"], "cardIds": card_ids})
-
-    conn.close()
-    return BoardResponse(columns=columns, cards=cards)
 
 
 class ColumnCreate(BaseModel):

@@ -1,0 +1,13 @@
+frontend/node_modules
+frontend/.next
+frontend/out
+backend/__pycache__
+backend/.venv
+backend/data
+backend/tests
+.git
+.env
+.claude
+docs
+scripts
+*.md

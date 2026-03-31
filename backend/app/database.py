@@ -1,8 +1,9 @@
-import hashlib
 import sqlite3
 from pathlib import Path
 
-DB_PATH = Path(__file__).resolve().parent.parent / "kanban.db"
+_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+_DATA_DIR.mkdir(exist_ok=True)
+DB_PATH = _DATA_DIR / "kanban.db"
 
 def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(str(DB_PATH), timeout=10)
@@ -46,7 +47,7 @@ def init_db() -> None:
         );
         CREATE TABLE IF NOT EXISTS chat_messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            board_id INTEGER NOT NULL REFERENCES boards(id),
+            board_id INTEGER REFERENCES boards(id),
             role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
             content TEXT NOT NULL,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -58,22 +59,6 @@ def init_db() -> None:
         );
     """)
 
-    # Seed user with hashed password
-    seed_salt = "seed"
-    seed_hash = hashlib.sha256((seed_salt + "password").encode()).hexdigest()
-    conn.execute(
-        "INSERT OR IGNORE INTO users (id, username, password) VALUES (1, 'user', ?)",
-        (f"{seed_salt}:{seed_hash}",),
-    )
-    conn.execute("INSERT OR IGNORE INTO boards (id, user_id, name) VALUES (1, 1, 'My Board')")
-    conn.execute("""
-        INSERT OR IGNORE INTO board_columns (id, board_id, title, position) VALUES
-            ('col-backlog', 1, 'Backlog', 0),
-            ('col-discovery', 1, 'Discovery', 1),
-            ('col-progress', 1, 'In Progress', 2),
-            ('col-review', 1, 'Review', 3),
-            ('col-done', 1, 'Done', 4)
-    """)
     conn.commit()
 
     # Migrations — add columns if they don't exist

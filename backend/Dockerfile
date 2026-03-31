@@ -5,7 +5,7 @@ WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ .
-RUN npm run build
+RUN NEXT_TELEMETRY_DISABLED=1 npm run build
 
 # Stage 2: Backend
 FROM python:3.12-slim AS backend

@@ -13,7 +13,7 @@ from app.database import get_connection
 router = APIRouter(prefix="/api")
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-MODEL = "claude-opus-4-6"
+MODEL = os.environ.get("AI_MODEL", "claude-sonnet-4-6")
 
 
 # ---------------------------------------------------------------------------
@@ -25,7 +25,7 @@ class ChatRequest(BaseModel):
 
 
 class BoardAction(BaseModel):
-    action: str  # create_card, update_card, move_card, delete_card, create_workstream, add_column, rename_column
+    action: str  # create_card, update_card, move_card, delete_card, create_workstream, add_column, rename_column, rename_project
     workstream_name: str | None = None
     workstream_id: int | None = None
     columns: list[str] | None = None
@@ -47,7 +47,6 @@ class BoardAction(BaseModel):
 class ChatResponse(BaseModel):
     reply: str
     board_updates: list[BoardAction] = []
-    create_board: dict | None = None
     plan: str | None = None
     plan_workstream: str | None = None
 
@@ -129,20 +128,14 @@ def _get_project_chat_history(project_id: int, limit: int = 20) -> list[dict]:
 
 def _save_project_message(project_id: int, role: str, content: str) -> None:
     conn = get_connection()
-    # board_id is NOT NULL with FK — use the first board in the project.
-    # For new projects with no boards yet, temporarily disable FK checks so we can store board_id=0.
     board = conn.execute(
         "SELECT id FROM boards WHERE project_id = ? ORDER BY id LIMIT 1", (project_id,)
     ).fetchone()
-    board_id = board["id"] if board else 0
-    if board_id == 0:
-        conn.execute("PRAGMA foreign_keys=OFF")
+    board_id = board["id"] if board else None
     conn.execute(
         "INSERT INTO chat_messages (board_id, project_id, role, content) VALUES (?, ?, ?, ?)",
         (board_id, project_id, role, content)
     )
-    if board_id == 0:
-        conn.execute("PRAGMA foreign_keys=ON")
     conn.commit()
     conn.close()
 
@@ -184,6 +177,12 @@ def _apply_project_updates(project_id: int, username: str, updates: list[BoardAc
             conn.execute(
                 "INSERT INTO board_columns (id, board_id, title, position) VALUES (?, ?, ?, ?)",
                 (col_id, ws_id, action.column_title.strip(), max_pos + 1),
+            )
+
+        elif act == "rename_project" and action.title:
+            conn.execute(
+                "UPDATE projects SET name = ? WHERE id = ?",
+                (action.title.strip(), project_id),
             )
 
         elif act == "rename_column" and action.column_id and action.column_title:
@@ -355,6 +354,9 @@ For small requests (1-3 card edits, a single rename, etc.), skip the plan and ex
 
 ## Available Actions (board_updates)
 
+### Project actions
+- `{"action": "rename_project", "title": "New Project Name"}`
+
 ### Workstream actions
 - `{"action": "create_workstream", "workstream_name": "Name", "columns": ["Col 1", "Col 2", "Col 3"]}`
 
@@ -478,7 +480,6 @@ def project_chat(body: ChatRequest, request: Request, project_id: int = Query(..
     reply = parsed.get("reply", "I could not generate a response.")
     board_updates_raw = parsed.get("board_updates", [])
     board_updates = [BoardAction(**u) for u in board_updates_raw if isinstance(u, dict)]
-    create_board_data = parsed.get("create_board", None)
     plan = parsed.get("plan", None)
     plan_workstream = parsed.get("plan_workstream", None)
 
@@ -490,7 +491,6 @@ def project_chat(body: ChatRequest, request: Request, project_id: int = Query(..
     return ChatResponse(
         reply=reply,
         board_updates=board_updates,
-        create_board=create_board_data,
         plan=plan,
         plan_workstream=plan_workstream,
     )
